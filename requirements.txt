@@ -1,5 +1,12 @@
-discord.py==2.2.2
+pillow
+requests
+discord.py
+discord-py-interactions
 python-dotenv==1.0.0
 revChatGPT==4.0.3
-openai==0.27.2
+openai
 asgiref==3.6.0
+ffmpeg-python
+colorama
+install-jdk
+stability-sdk
