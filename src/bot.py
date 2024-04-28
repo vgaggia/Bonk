@@ -247,7 +247,7 @@ def run_discord_bot():
         async def start(self, interaction: discord.Interaction):
             self.message = await interaction.response.send_message("Select the model you want to use:", view=self)
 
-        @discord.ui.button(label="Dall-E 3 (OpenAI)", style=discord.ButtonStyle.primary)
+        @discord.ui.button(label="Dall-E 3", style=discord.ButtonStyle.primary)
         async def dalle_button(self, interaction: discord.Interaction, button: discord.ui.Button):
             await interaction.response.defer(thinking=True)
             try:
@@ -261,7 +261,7 @@ def run_discord_bot():
             except Exception as e:
                 await interaction.followup.send(f"> **Error: {str(e)}**")
 
-        @discord.ui.button(label="Stable Diffusion 3 (StabilityAI)", style=discord.ButtonStyle.secondary)
+        @discord.ui.button(label="Stable Diffusion 3", style=discord.ButtonStyle.secondary)
         async def stable_diffusion_button(self, interaction: discord.Interaction, button: discord.ui.Button):
             await interaction.response.defer(thinking=True)
             try:
