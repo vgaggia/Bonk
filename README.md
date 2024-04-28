@@ -26,7 +26,7 @@ This project is licensed under the [GPL-3.0 License](LICENSE).
 # .env recommended layout:
 
 ```# Discord Bot token
-DISCORD_BOT_TOKEN="YOUR-OPENAI-API-KEY"
+DISCORD_BOT_TOKEN="YOUR-DISCORD-BOT-TOKEN"
 
 # OpenAI Authentication
 OPENAI_API_KEY="YOUR-OPENAI-API-KEY"
