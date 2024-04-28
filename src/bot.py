@@ -246,7 +246,8 @@ def run_discord_bot():
 
         async def start(self, interaction: discord.Interaction):
             self.message = await interaction.response.send_message("Select the model you want to use:", view=self)
-
+            self.buttons_message = self.message
+            
         @discord.ui.button(label="Dall-E 3", style=discord.ButtonStyle.primary)
         async def dalle_button(self, interaction: discord.Interaction, button: discord.ui.Button):
             await interaction.response.defer(thinking=True)
@@ -277,13 +278,12 @@ def run_discord_bot():
 
         @discord.ui.button(label="Cancel", style=discord.ButtonStyle.danger)
         async def cancel_button(self, interaction: discord.Interaction, button: discord.ui.Button):
-            if self.buttons_message:
-                await self.buttons_message.delete()  # Delete the message containing the buttons
-            await interaction.response.send_message("Image generation canceled.", ephemeral=True)
+                await interaction.message.delete()  # Delete the original interaction response message
+                await interaction.response.send_message("Image generation canceled.", ephemeral=True)
 
         async def on_timeout(self):
-            if self.buttons_message:
-                await self.buttons_message.delete()  # Delete the message containing the buttons
+                await interaction.message.delete()  # Delete the original interaction response message
+                await interaction.response.send_message("Image generation canceled due to timeout", ephemeral=True)
 
     @client_instance.tree.command(name="switchpersona", description="Switch between optional chatGPT jailbreaks")
     @app_commands.choices(persona=[
