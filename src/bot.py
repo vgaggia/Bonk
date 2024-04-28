@@ -250,32 +250,33 @@ def run_discord_bot():
             
         @discord.ui.button(label="Dall-E 3", style=discord.ButtonStyle.primary)
         async def dalle_button(self, interaction: discord.Interaction, button: discord.ui.Button):
-            await interaction.response.defer(thinking=True)
             try:
+                await interaction.response.defer()
+                await interaction.message.edit(content="Generating image...", view=None)
                 path = await art.draw(self.prompt, model_choice="dalle")
                 file = discord.File(path, filename="image.png")
-                title = '> **' + self.prompt + '** (Dall-E 3)\n'
-                embed = discord.Embed(title=title)
+                embed = discord.Embed(title=f"> **{self.prompt}**")
+                embed.description = "> **Model: Dall-E 3**"
                 embed.set_image(url="attachment://image.png")
-                await interaction.followup.send(file=file, embed=embed)
-                await interaction.message.delete()  # Delete the original interaction response message
+                await interaction.message.edit(content=None, attachments=[file], embed=embed, view=None)
+                self.stop()
             except Exception as e:
-                await interaction.followup.send(f"> **Error: {str(e)}**")
+                await interaction.message.edit(content=f"> **Error: {str(e)}**", embed=None, view=None)
 
         @discord.ui.button(label="Stable Diffusion 3", style=discord.ButtonStyle.secondary)
         async def stable_diffusion_button(self, interaction: discord.Interaction, button: discord.ui.Button):
-            await interaction.response.defer(thinking=True)
             try:
+                await interaction.response.defer()
+                await interaction.message.edit(content="Generating image...", view=None)
                 path = await art.draw(self.prompt, model_choice="sd")
                 file = discord.File(path, filename="image.png")
-                title = '> **' + self.prompt + '** (Stable Diffusion 3)\n'
-                embed = discord.Embed(title=title)
+                embed = discord.Embed(title=f"> **{self.prompt}**")
+                embed.description = "> **Model: Stable Diffusion 3**"
                 embed.set_image(url="attachment://image.png")
-                await interaction.followup.send(file=file, embed=embed)
-                await interaction.message.delete()  # Delete the original interaction response message
+                await interaction.message.edit(content=None, attachments=[file], embed=embed, view=None)
+                self.stop()
             except Exception as e:
-                await interaction.followup.send(f"> **Error: {str(e)}**")
-
+                await interaction.message.edit(content=f"> **Error: {str(e)}**", embed=None, view=None)
         @discord.ui.button(label="Cancel", style=discord.ButtonStyle.danger)
         async def cancel_button(self, interaction: discord.Interaction, button: discord.ui.Button):
                 await interaction.message.delete()  # Delete the original interaction response message
