@@ -23,10 +23,10 @@ Once the bot is running, you can interact with it in any discord server you add 
 This project is licensed under the [GPL-3.0 License](LICENSE).
 
 
-## env recommended layout:
+# .env recommended layout:
 
-# Discord Bot token
-DISCORD_BOT_TOKEN="YOUR-OPENAI-API-KEY"
+```# Discord Bot token
+DISCORD_BOT_TOKEN="YOUR-DISCORD-BOT-TOKEN"
 
 # OpenAI Authentication
 OPENAI_API_KEY="YOUR-OPENAI-API-KEY"
@@ -40,4 +40,3 @@ GPT_ENGINE="gpt-4"
 LOGGING="True"
 REPLYING_ALL="False"
 REPLYING_ALL_DISCORD_CHANNEL_ID=""
-
