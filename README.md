@@ -1,6 +1,6 @@
 # Bonk
 
-- Bonk is a bot that can be used to generate image and or interact with GPT-4 using StabilityAI and OpenAI's APIs respectively.
+- Bonk is a bot that can be used to generate images and or interact with GPT-4 using StabilityAI and OpenAI's APIs respectively.
 
 ## Features
 
