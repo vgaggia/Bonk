@@ -28,7 +28,7 @@ def generate_image_dalle(prompt):
         raise Exception(f"Error generating image from DALL-E: {str(e)}")
 
 # Function to generate an image using Stable Diffusion (Stability AI)
-def generate_image_sd(prompt):
+def generate_image_sd(prompt, aspect_ratio):
     try:
         response = requests.post(
             f"https://api.stability.ai/v2beta/stable-image/generate/sd3",
@@ -40,6 +40,7 @@ def generate_image_sd(prompt):
             data={
                 "prompt": prompt,
                 "output_format": "png",
+                "aspect_ratio": aspect_ratio
             },
         )
 
@@ -71,7 +72,7 @@ def download_image(image_url, save_path):
         file.write(response.content)
 
 # Modified draw function with default model choice
-async def draw(prompt, model_choice="dalle") -> str:
+async def draw(prompt, model_choice="dalle", aspect_ratio="1:1") -> str:
     DATA_DIR = Path.cwd()
     DATA_DIR.mkdir(exist_ok=True)
 
@@ -87,7 +88,7 @@ async def draw(prompt, model_choice="dalle") -> str:
             raise Exception(f"Error generating image from DALL-E: {str(e)}")
     elif model_choice == "sd":
         try:
-            image_data = generate_image_sd(prompt)
+            image_data = generate_image_sd(prompt, aspect_ratio)
             sanitized_prompt = prompt.replace("/", "_").replace("\\", "_")
             image_filename = f"{sanitized_prompt}_sd.png"
             image_path = DATA_DIR / "images" / image_filename

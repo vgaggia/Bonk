@@ -236,17 +236,18 @@ def run_discord_bot():
 
         view = DrawButtons(prompt)
         await view.start(interaction)
-
     class DrawButtons(discord.ui.View):
         def __init__(self, prompt):
             super().__init__(timeout=60.0)
             self.prompt = prompt
             self.message = None  # Add a reference to the message containing the buttons
             self.buttons_message = None  # Initialize the buttons_message attribute
+            self.interaction = None  # Add a reference to the interaction object
 
         async def start(self, interaction: discord.Interaction):
             self.message = await interaction.response.send_message("Select the model you want to use:", view=self)
             self.buttons_message = self.message
+            self.interaction = interaction  # Store a reference to the interaction object
             
         @discord.ui.button(label="Dall-E 3", style=discord.ButtonStyle.primary)
         async def dalle_button(self, interaction: discord.Interaction, button: discord.ui.Button):
@@ -264,26 +265,69 @@ def run_discord_bot():
 
         @discord.ui.button(label="Stable Diffusion 3", style=discord.ButtonStyle.secondary)
         async def stable_diffusion_button(self, interaction: discord.Interaction, button: discord.ui.Button):
-            await interaction.response.defer(thinking=True)
-            try:
-                path = await art.draw(self.prompt, model_choice="sd")
-                file = discord.File(path, filename="image.png")
-                title = '> **' + self.prompt + '** (Stable Diffusion 3)\n'
-                embed = discord.Embed(title=title)
-                embed.set_image(url="attachment://image.png")
-                await interaction.followup.send(file=file, embed=embed)
-                await interaction.message.delete()  # Delete the original interaction response message
-            except Exception as e:
-                await interaction.followup.send(f"> **Error: {str(e)}**")
+            view = AspectRatioButtons(self.prompt)
+            await view.start(interaction)
 
         @discord.ui.button(label="Cancel", style=discord.ButtonStyle.danger)
         async def cancel_button(self, interaction: discord.Interaction, button: discord.ui.Button):
-                await interaction.message.delete()  # Delete the original interaction response message
-                await interaction.response.send_message("Image generation canceled.", ephemeral=True)
+            await interaction.message.delete()  # Delete the original interaction response message
+            await interaction.response.send_message("Image generation canceled.", ephemeral=True)
 
         async def on_timeout(self):
-                await interaction.message.delete()  # Delete the original interaction response message
-                await interaction.response.send_message("Image generation canceled due to timeout", ephemeral=True)
+            if self.interaction:
+                await self.interaction.response.send_message("Image generation canceled due to timeout", ephemeral=True)
+
+    class AspectRatioButtons(discord.ui.View):
+        def __init__(self, prompt):
+            super().__init__(timeout=60.0)
+            self.prompt = prompt
+            self.message = None  # Add a reference to the message containing the buttons
+            
+        async def start(self, interaction: discord.Interaction):
+            self.message = await interaction.response.send_message("Select an aspect ratio:", view=self)
+
+        async def generate_and_send_image(self, interaction: discord.Interaction, aspect_ratio: str):
+            await interaction.response.defer(thinking=True)
+            try:
+                path = await art.draw(self.prompt, model_choice="sd", aspect_ratio=aspect_ratio)
+                file = discord.File(path, filename="image.png")
+                title = f"> **{self.prompt}** (Stable Diffusion 3 - {aspect_ratio})\n"
+                embed = discord.Embed(title=title)
+                embed.set_image(url="attachment://image.png")
+                await interaction.followup.send(file=file, embed=embed)
+            except Exception as e:
+                await interaction.followup.send(f"> **Error: {str(e)}**")
+            finally:
+                if self.message:
+                    await self.message.delete()
+
+        @discord.ui.button(label="1:1", style=discord.ButtonStyle.primary)
+        async def aspect_ratio_11(self, interaction: discord.Interaction, button: discord.ui.Button):
+            await self.generate_and_send_image(interaction, "1:1")
+
+        @discord.ui.button(label="21:9", style=discord.ButtonStyle.primary)
+        async def aspect_ratio_219(self, interaction: discord.Interaction, button: discord.ui.Button):
+            await self.generate_and_send_image(interaction, "21:9")
+
+        @discord.ui.button(label="16:9", style=discord.ButtonStyle.primary)
+        async def aspect_ratio_169(self, interaction: discord.Interaction, button: discord.ui.Button):
+            await self.generate_and_send_image(interaction, "16:9")
+
+        @discord.ui.button(label="5:4", style=discord.ButtonStyle.primary)
+        async def aspect_ratio_54(self, interaction: discord.Interaction, button: discord.ui.Button):
+            await self.generate_and_send_image(interaction, "5:4")
+
+        @discord.ui.button(label="4:5", style=discord.ButtonStyle.primary)
+        async def aspect_ratio_45(self, interaction: discord.Interaction, button: discord.ui.Button):
+            await self.generate_and_send_image(interaction, "4:5")
+
+        @discord.ui.button(label="9:16", style=discord.ButtonStyle.primary)
+        async def aspect_ratio_916(self, interaction: discord.Interaction, button: discord.ui.Button):
+            await self.generate_and_send_image(interaction, "9:16")
+
+        @discord.ui.button(label="9:21", style=discord.ButtonStyle.primary)
+        async def aspect_ratio_921(self, interaction: discord.Interaction, button: discord.ui.Button):
+            await self.generate_and_send_image(interaction, "9:21")
 
     @client_instance.tree.command(name="switchpersona", description="Switch between optional chatGPT jailbreaks")
     @app_commands.choices(persona=[
