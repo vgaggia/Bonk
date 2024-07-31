@@ -1,13 +1,7 @@
 pillow
 requests
 discord.py
-discord-py-interactions
 python-dotenv==1.0.0
-revChatGPT==4.0.3
 openai
 anthropic
-asgiref==3.6.0
-ffmpeg-python
-colorama
-install-jdk
 stability-sdk
