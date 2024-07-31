@@ -30,7 +30,6 @@ ANTHROPIC_API_KEY=""
 OPENAI_API_KEY=""
 
 # Stability AI API Key
-
 STABILITY_API_KEY = ""
 
 # Optional settings
