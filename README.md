@@ -19,7 +19,7 @@ Integrates with StabilityAI and OpenAI's APIs
 Once the bot is running, you can interact with it in any discord server you add it to with the /draw, /chat and /help command
 
 # .env recommended layout:
-
+```
 # Discord Bot token
 DISCORD_BOT_TOKEN=""
 
@@ -37,7 +37,7 @@ STABILITY_API_KEY = ""
 CHAT_MODEL="ANTHROPIC"
 GPT_ENGINE="claude-3-5-sonnet-20240620"
 LOGGING="True"
-
+```
 
 ## License
 
