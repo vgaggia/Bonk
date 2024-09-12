@@ -32,7 +32,7 @@ async def handle_response(message) -> str:
             model="claude-3-5-sonnet-20240620",
             max_tokens=1000,
             temperature=0.7,
-            system="You are Claude, an AI assistant. Respond only to the current message without considering any previous context.",
+            system="You are Claude, an AI assistant.",
             messages=[
                 {
                     "role": "user",
