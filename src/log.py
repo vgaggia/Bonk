@@ -2,7 +2,6 @@ import os
 import logging
 import logging.handlers
 
-
 class CustomFormatter(logging.Formatter):
     LEVEL_COLORS = [
         (logging.DEBUG, '\x1b[40;1m'),
@@ -19,7 +18,6 @@ class CustomFormatter(logging.Formatter):
         for level, color in LEVEL_COLORS
     }
 
-
     def format(self, record):
         formatter = self.FORMATS.get(record.levelno)
         if formatter is None:
@@ -34,7 +32,6 @@ class CustomFormatter(logging.Formatter):
         # Remove the cache layer
         record.exc_text = None
         return output
-
 
 def setup_logger(module_name:str) -> logging.Logger:
     # create logger
