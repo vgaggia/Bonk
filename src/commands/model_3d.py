@@ -1,6 +1,7 @@
 import discord
 from src import log
 from src.art import model_3d, utils
+from src.art.error_handler import display_error
 
 logger = log.setup_logger(__name__)
 
@@ -44,4 +45,5 @@ async def handle_3d(interaction: discord.Interaction, user: discord.Member = Non
 
     except Exception as e:
         logger.exception(f"Error in 3d command: {str(e)}")
-        await interaction.followup.send(content="An error occurred while generating the 3D model.")
+        error_message = display_error(e)
+        await interaction.followup.send(content=error_message)

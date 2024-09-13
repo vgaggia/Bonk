@@ -1,3 +1,6 @@
+class ContentModerationError(Exception):
+    pass
+
 import traceback
 
 def handle_error(error):
@@ -17,9 +20,9 @@ def handle_error(error):
     elif error_type == "InvalidAPIKeyError":
         return "Invalid API key. Please check your API key and try again."
     elif error_type == "ContentModerationError":
-        return "Your request was flagged by the content moderation system and cannot be processed. Please try a different image."
+        return "Your request was flagged by the content moderation system and cannot be processed"
     else:
-        return f"An unexpected error occurred: {error_message}\n\nStack trace:\n{traceback.format_exc()}"
+        return f"An unexpected error occurred (Or content moderation was triggered)"
 
 def display_error(error):
     error_message = handle_error(error)

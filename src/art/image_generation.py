@@ -6,7 +6,7 @@ import replicate
 import logging
 from openai import OpenAI
 from dotenv import load_dotenv
-from .error_handler import display_error
+from .error_handler import display_error, ContentModerationError
 
 load_dotenv()
 logger = logging.getLogger(__name__)
@@ -74,9 +74,21 @@ async def generate_image_sd(prompt, aspect_ratio):
                 file.write(response.content)
             
             return image_path
+        elif response.status_code == 400:
+            error_data = response.json()
+            if 'message' in error_data and 'content moderation' in error_data['message'].lower():
+                raise ContentModerationError("The image was flagged by content moderation.")
+            else:
+                raise Exception(f"Bad Request: {error_data.get('message', 'Unknown error')}")
         else:
             raise Exception(f"Error: {response.status_code} {response.text}")
 
+    except ContentModerationError as e:
+        logger.error(f"Content moderation error: {str(e)}")
+        return display_error(e)
+    except requests.RequestException as e:
+        logger.error(f"Network error when generating image from Stability AI: {str(e)}")
+        return display_error(e)
     except Exception as e:
         logger.error(f"Error generating image from Stability AI: {str(e)}")
         return display_error(e)
@@ -107,6 +119,8 @@ async def generate_image_replicate(prompt, aspect_ratio):
             raise Exception(f"Unexpected output format: {prediction}")
 
         if not output_url.startswith(('http://', 'https://')):
+            if 'error' in output_url.lower() and 'safety' in output_url.lower():
+                raise ContentModerationError("The image was flagged by content moderation.")
             raise Exception(f"Invalid image URL returned: {output_url}")
 
         logger.debug(f"Replicate image generated successfully. URL: {output_url}")
@@ -121,6 +135,15 @@ async def generate_image_replicate(prompt, aspect_ratio):
         
         return image_path
 
+    except ContentModerationError as e:
+        logger.error(f"Content moderation error: {str(e)}")
+        return display_error(e)
+    except replicate.exceptions.ReplicateError as e:
+        logger.error(f"Replicate API error: {str(e)}")
+        return display_error(e)
+    except requests.RequestException as e:
+        logger.error(f"Network error when generating image from Replicate: {str(e)}")
+        return display_error(e)
     except Exception as e:
         logger.error(f"Error generating image from Replicate: {str(e)}")
         return display_error(e)
