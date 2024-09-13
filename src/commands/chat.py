@@ -13,8 +13,8 @@ async def handle_chat(interaction, message):
         logger.info(f"[{message_id}] Received response from handle_response")
         
         logger.info(f"[{message_id}] Sending response to user")
-        await interaction.response.send_message(response)
+        await interaction.followup.send(response)
         logger.info(f"[{message_id}] Response sent to user")
     except Exception as e:
         logger.exception(f"[{message_id}] Error in chat command: {str(e)}")
-        await interaction.response.send_message("An error occurred while processing your request.")
+        await interaction.followup.send("An error occurred while processing your request.")

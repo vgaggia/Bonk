@@ -6,8 +6,6 @@ from src.art.error_handler import display_error
 logger = log.setup_logger(__name__)
 
 async def handle_3d(interaction: discord.Interaction, user: discord.Member = None, attachment: discord.Attachment = None):
-    await interaction.response.defer(thinking=True)
-    
     try:
         image_url = None
         
@@ -36,6 +34,7 @@ async def handle_3d(interaction: discord.Interaction, user: discord.Member = Non
         
         # If we have an image URL, process it
         if image_url:
+            await interaction.followup.send("Generating 3D model... This may take a moment.")
             image_path = await utils.download_image_from_url(image_url)
             model_path = await model_3d.generate_3d_model(image_path)
             file = discord.File(model_path, filename="3d_model.glb")
