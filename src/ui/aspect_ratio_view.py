@@ -51,7 +51,7 @@ class AspectRatioView(discord.ui.View):
         try:
             model_name = "Stable Diffusion 3" if self.model == "sd" else "Replicate"
             await interaction.response.defer(thinking=True)
-            await interaction.followup.send(f"Generating image with {model_name} (Aspect Ratio: {aspect_ratio})... This may take a minute or two.")
+            await interaction.followup.send(f"Generating image with {model_name} (Aspect Ratio: {aspect_ratio})")
             
             if self.model == "sd":
                 self.parent_view.image_path = await image_generation.generate_image_sd(self.parent_view.prompt, aspect_ratio)

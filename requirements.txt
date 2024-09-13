@@ -6,3 +6,7 @@ Pillow>=9.0.0
 requests>=2.25.0
 aiohttp>=3.7.0
 replicate>=0.8.0
+matplotlib>=3.0.0
+imageio>=2.0.0
+numpy>=1.19.0
+trimesh>=3.9.35
