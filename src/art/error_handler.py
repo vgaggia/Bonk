@@ -16,6 +16,8 @@ def handle_error(error):
         return "Rate limit exceeded. Please try again later."
     elif error_type == "InvalidAPIKeyError":
         return "Invalid API key. Please check your API key and try again."
+    elif error_type == "ContentModerationError":
+        return "Your request was flagged by the content moderation system and cannot be processed. Please try a different image."
     else:
         return f"An unexpected error occurred: {error_message}\n\nStack trace:\n{traceback.format_exc()}"
 

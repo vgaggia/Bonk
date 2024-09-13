@@ -43,13 +43,10 @@ async def handle_3d(interaction: discord.Interaction, user: discord.Member = Non
         else:
             await interaction.followup.send("Please provide a user, attach an image, or reply to a message with an image to generate a 3D model.")
 
-    except ContentModerationError as e:
-        logger.warning(f"Content moderation error in 3d command: {str(e)}")
-        await interaction.followup.send(content="Your request was flagged by the content moderation system and cannot be processed. Please try a different image.")
     except Exception as e:
         logger.exception(f"Error in 3d command: {str(e)}")
         error_message = display_error(e)
-        await interaction.followup.send(content=f"An error occurred while generating the 3D model: {error_message}")
+        await interaction.followup.send(content=error_message)
 
 async def generate_3d_model(image_path):
     try:
