@@ -1,3 +1,4 @@
+import io
 import discord
 from src import log
 from src.art import image_generation
@@ -51,23 +52,32 @@ class AspectRatioView(discord.ui.View):
         try:
             model_name = "Stable Diffusion 3" if self.model == "sd" else "Replicate"
             await interaction.response.defer(thinking=True)
-            await interaction.followup.send(f"Generating image with {model_name} (Aspect Ratio: {aspect_ratio})")
+            await interaction.followup.send(f"Generating image with {model_name} (Aspect Ratio: {aspect_ratio})... This may take a minute or two.")
             
             if self.model == "sd":
-                self.parent_view.image_path = await image_generation.generate_image_sd(self.parent_view.prompt, aspect_ratio)
+                result = await image_generation.generate_image_sd(self.parent_view.prompt, aspect_ratio)
             else:
-                self.parent_view.image_path = await image_generation.generate_image_replicate(self.parent_view.prompt, aspect_ratio)
+                result = await image_generation.generate_image_replicate(self.parent_view.prompt, aspect_ratio)
 
-            file = discord.File(self.parent_view.image_path, filename="image.png")
-            embed = discord.Embed(title=f"> **{self.parent_view.prompt}**")
-            embed.description = f"> **Model: {model_name}**\n> **Aspect Ratio: {aspect_ratio}**"
-            embed.set_image(url="attachment://image.png")
-            
-            view = GenerateVideoView(self.parent_view.image_path)
-            
-            await interaction.edit_original_response(content=None, attachments=[file], embed=embed, view=view)
-            self.parent_view.interaction_completed = True
-            self.parent_view.stop()
+            if isinstance(result, str):
+                # This is an error message
+                logger.error(f"Error in {model_name}: {result}")
+                await interaction.edit_original_response(content=f"> **Error in {model_name}: {result}**", view=None)
+                self.parent_view.interaction_completed = True
+                self.parent_view.stop()
+            else:
+                # This is a tuple containing image_data and image_path
+                image_data, self.parent_view.image_path = result
+                file = discord.File(io.BytesIO(image_data), filename="image.png")
+                embed = discord.Embed(title=f"> **{self.parent_view.prompt}**")
+                embed.description = f"> **Model: {model_name}**\n> **Aspect Ratio: {aspect_ratio}**"
+                embed.set_image(url="attachment://image.png")
+                
+                view = GenerateVideoView(self.parent_view.image_path)
+                
+                await interaction.edit_original_response(content=None, attachments=[file], embed=embed, view=view)
+                self.parent_view.interaction_completed = True
+                self.parent_view.stop()
         except Exception as e:
             logger.exception(f"Error in generate_image: {str(e)}")
             await interaction.edit_original_response(content=f"> **Error: An error occurred while generating the image.**", view=None)

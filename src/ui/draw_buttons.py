@@ -1,3 +1,4 @@
+import io
 import discord
 from src import log
 from src.art import image_generation
@@ -76,9 +77,9 @@ class DrawButtons(discord.ui.View):
                 self.interaction_completed = True
                 self.stop()
             else:
-                # This is a valid image path
-                self.image_path = result
-                file = discord.File(self.image_path, filename="image.png")
+                # This is a tuple containing image_data and image_path
+                image_data, self.image_path = result
+                file = discord.File(io.BytesIO(image_data), filename="image.png")
                 embed = discord.Embed(title=f"> **{self.prompt}**")
                 embed.description = f"> **Model: {model_name}**"
                 if aspect_ratio:
@@ -96,7 +97,7 @@ class DrawButtons(discord.ui.View):
             self.interaction_completed = True
             self.stop()
         except Exception as e:
-            logger.exception(f"Unexpected error in generate_{model_name.lower().replace(' ', '_')}_image: {str(e)}")
+            logger.error(f"Unexpected error in generate_{model_name.lower().replace(' ', '_')}_image: {str(e)}")
             await interaction.edit_original_response(content=f"> **Error: An unexpected error occurred while generating the image with {model_name}.**", view=None)
             self.interaction_completed = True
             self.stop()

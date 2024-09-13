@@ -4,6 +4,7 @@ import io
 from PIL import Image
 import replicate
 import logging
+import hashlib
 from openai import OpenAI
 from dotenv import load_dotenv
 from .error_handler import display_error, ContentModerationError
@@ -31,15 +32,15 @@ async def generate_image_dalle(prompt):
         image_url = response.data[0].url
         logger.debug(f"DALL-E 3 image generated successfully. URL: {image_url}")
         
-        sanitized_prompt = prompt.replace("/", "_").replace("\\", "_")[:50]
-        image_filename = f"{sanitized_prompt}_dalle.png"
+        image_data = requests.get(image_url).content
+        image_hash = hashlib.md5(image_data).hexdigest()
+        image_filename = f"{image_hash}.png"
         image_path = os.path.join(IMAGES_DIR, image_filename)
         
-        response = requests.get(image_url)
         with open(image_path, "wb") as file:
-            file.write(response.content)
+            file.write(image_data)
         
-        return image_path
+        return image_data, image_path
     except Exception as e:
         logger.error(f"Error generating image from DALL-E 3: {str(e)}")
         return display_error(e)
@@ -66,14 +67,15 @@ async def generate_image_sd(prompt, aspect_ratio):
 
         if response.status_code == 200:
             logger.debug("Stable Diffusion 3 image generated successfully")
-            sanitized_prompt = prompt.replace("/", "_").replace("\\", "_")[:50]
-            image_filename = f"{sanitized_prompt}_sd_{aspect_ratio.replace(':', 'x')}.png"
+            image_data = response.content
+            image_hash = hashlib.md5(image_data).hexdigest()
+            image_filename = f"{image_hash}.png"
             image_path = os.path.join(IMAGES_DIR, image_filename)
             
             with open(image_path, "wb") as file:
-                file.write(response.content)
+                file.write(image_data)
             
-            return image_path
+            return image_data, image_path
         elif response.status_code == 400:
             error_data = response.json()
             if 'message' in error_data and 'content moderation' in error_data['message'].lower():
@@ -95,10 +97,10 @@ async def generate_image_sd(prompt, aspect_ratio):
 
 async def generate_image_replicate(prompt, aspect_ratio):
     try:
-        logger.debug(f"Generating image with Replicate (black-forest-labs/flux-pro). Prompt: {prompt}, Aspect Ratio: {aspect_ratio}")
+        logger.debug(f"Generating image with Replicate (black-forest-labs/flux-schnell). Prompt: {prompt}, Aspect Ratio: {aspect_ratio}")
         
         prediction = replicate.run(
-            "black-forest-labs/flux-pro",
+            "black-forest-labs/flux-schnell",
             input={
                 "prompt": prompt,
                 "aspect_ratio": aspect_ratio,
@@ -106,8 +108,8 @@ async def generate_image_replicate(prompt, aspect_ratio):
                 "guidance": 3,
                 "interval": 2,
                 "output_format": "webp",
-                "output_quality": 80,
-                "safety_tolerance": 2
+                "output_quality": 100,
+                "disable_safety_checker": True,
             }
         )
 
@@ -125,15 +127,15 @@ async def generate_image_replicate(prompt, aspect_ratio):
 
         logger.debug(f"Replicate image generated successfully. URL: {output_url}")
         
-        sanitized_prompt = prompt.replace("/", "_").replace("\\", "_")[:50]
-        image_filename = f"{sanitized_prompt}_replicate_{aspect_ratio.replace(':', 'x')}.webp"
+        image_data = requests.get(output_url).content
+        image_hash = hashlib.md5(image_data).hexdigest()
+        image_filename = f"{image_hash}.webp"
         image_path = os.path.join(IMAGES_DIR, image_filename)
         
-        response = requests.get(output_url)
         with open(image_path, "wb") as file:
-            file.write(response.content)
+            file.write(image_data)
         
-        return image_path
+        return image_data, image_path
 
     except ContentModerationError as e:
         logger.error(f"Content moderation error: {str(e)}")
