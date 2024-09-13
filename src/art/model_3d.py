@@ -3,6 +3,7 @@ import requests
 import discord
 from src import log
 from src.art import utils
+from .error_handler import display_error
 
 logger = log.setup_logger(__name__)
 
@@ -47,7 +48,8 @@ async def handle_3d(interaction: discord.Interaction, user: discord.Member = Non
         await interaction.followup.send(content="Your request was flagged by the content moderation system and cannot be processed. Please try a different image.")
     except Exception as e:
         logger.exception(f"Error in 3d command: {str(e)}")
-        await interaction.followup.send(content="An error occurred while generating the 3D model.")
+        error_message = display_error(e)
+        await interaction.followup.send(content=f"An error occurred while generating the 3D model: {error_message}")
 
 async def generate_3d_model(image_path):
     try:

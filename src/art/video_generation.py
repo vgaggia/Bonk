@@ -5,6 +5,7 @@ from PIL import Image
 import time
 import hashlib
 import logging
+from .error_handler import display_error
 
 logger = logging.getLogger(__name__)
 
@@ -85,4 +86,4 @@ async def image_to_video(image_path):
 
     except Exception as e:
         logger.error(f"Error generating video: {str(e)}")
-        raise
+        return display_error(e)

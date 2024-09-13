@@ -6,6 +6,7 @@ import replicate
 import logging
 from openai import OpenAI
 from dotenv import load_dotenv
+from .error_handler import display_error
 
 load_dotenv()
 logger = logging.getLogger(__name__)
@@ -41,7 +42,7 @@ async def generate_image_dalle(prompt):
         return image_path
     except Exception as e:
         logger.error(f"Error generating image from DALL-E 3: {str(e)}")
-        raise
+        return display_error(e)
 
 async def generate_image_sd(prompt, aspect_ratio):
     try:
@@ -78,7 +79,7 @@ async def generate_image_sd(prompt, aspect_ratio):
 
     except Exception as e:
         logger.error(f"Error generating image from Stability AI: {str(e)}")
-        raise
+        return display_error(e)
 
 async def generate_image_replicate(prompt, aspect_ratio):
     try:
@@ -122,4 +123,4 @@ async def generate_image_replicate(prompt, aspect_ratio):
 
     except Exception as e:
         logger.error(f"Error generating image from Replicate: {str(e)}")
-        raise
+        return display_error(e)
