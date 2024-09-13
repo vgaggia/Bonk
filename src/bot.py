@@ -4,8 +4,7 @@ import uuid
 import discord
 from discord import app_commands
 from src import responses, log
-from src.art import image_generation, video_generation, model_3d, utils
-from src.commands import chat, draw, imagine, model_3d as model_3d_command, reset, help
+from src.commands import chat, draw, imagine, model_3d, reset, help
 from src.ui import draw_buttons, aspect_ratio_view, generate_video_view
 from dotenv import load_dotenv
 import anthropic
@@ -49,7 +48,7 @@ async def imagine_command(interaction: discord.Interaction, user: discord.Member
 
 @tree.command(name="3d", description="Generate a 3D model from an image")
 async def model_3d_command(interaction: discord.Interaction, user: discord.Member = None, attachment: discord.Attachment = None):
-    await model_3d_command.handle_3d(interaction, user, attachment)
+    await model_3d.handle_3d(interaction, user, attachment)
 
 @tree.command(name="reset", description="Reset Claude conversation history")
 async def reset_command(interaction: discord.Interaction):
