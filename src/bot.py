@@ -4,7 +4,7 @@ import uuid
 import discord
 from discord import app_commands
 from src import responses, log
-from src.commands import chat, draw, imagine, model_3d, reset, help
+from src.commands import chat, draw, imagine, model_3d, reset, help, music
 from src.ui import draw_buttons, aspect_ratio_view, generate_video_view
 from dotenv import load_dotenv
 import anthropic
@@ -51,9 +51,17 @@ async def chat_command(interaction: discord.Interaction, message: str):
     await chat.handle_chat(interaction, message)
 
 @tree.command(name="draw", description="Generate an image with the Dalle3, Stable Diffusion, or Replicate model")
+@app_commands.describe(
+    prompt="The prompt for image generation",
+    enhance="Enhance the prompt using AI (optional)"
+)
+@app_commands.choices(enhance=[
+    app_commands.Choice(name="Yes", value="yes"),
+    app_commands.Choice(name="No", value="no")
+])
 @enqueue
-async def draw_command(interaction: discord.Interaction, prompt: str):
-    await draw.handle_draw(interaction, prompt)
+async def draw_command(interaction: discord.Interaction, prompt: str, enhance: app_commands.Choice[str] = None):
+    await draw.handle_draw(interaction, prompt, enhance)
 
 @tree.command(name="imagine", description="Animate user profile pictures or an attached image")
 @enqueue
@@ -74,6 +82,31 @@ async def reset_command(interaction: discord.Interaction):
 @enqueue
 async def help_command(interaction: discord.Interaction):
     await help.handle_help(interaction)
+
+@tree.command(name="play", description="Play a YouTube video in your voice channel")
+@enqueue
+async def play_command(interaction: discord.Interaction, url: str):
+    await music.play(interaction, url)
+
+@tree.command(name="stop", description="Stop playback and clear the queue")
+@enqueue
+async def stop_command(interaction: discord.Interaction):
+    await music.stop(interaction)
+
+@tree.command(name="pause", description="Pause the current playback")
+@enqueue
+async def pause_command(interaction: discord.Interaction):
+    await music.pause(interaction)
+
+@tree.command(name="resume", description="Resume paused playback")
+@enqueue
+async def resume_command(interaction: discord.Interaction):
+    await music.resume(interaction)
+
+@tree.command(name="next", description="Skip to the next song in the queue")
+@enqueue
+async def next_command(interaction: discord.Interaction):
+    await music.next(interaction)
 
 def run_discord_bot():
     TOKEN = os.getenv("DISCORD_BOT_TOKEN")

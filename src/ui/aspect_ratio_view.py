@@ -11,49 +11,61 @@ class AspectRatioView(discord.ui.View):
         super().__init__(timeout=60.0)
         self.parent_view = parent_view
         self.model = model
-        self.aspect_ratio_message = None  # New attribute to store the aspect ratio message
 
     @discord.ui.button(label="16:9", style=discord.ButtonStyle.secondary)
     async def ratio_16_9(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await interaction.response.defer()
         await self.generate_image(interaction, "16:9")
 
     @discord.ui.button(label="1:1", style=discord.ButtonStyle.secondary)
     async def ratio_1_1(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await interaction.response.defer()
         await self.generate_image(interaction, "1:1")
 
     @discord.ui.button(label="21:9", style=discord.ButtonStyle.secondary)
     async def ratio_21_9(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await interaction.response.defer()
         await self.generate_image(interaction, "21:9")
 
     @discord.ui.button(label="2:3", style=discord.ButtonStyle.secondary)
     async def ratio_2_3(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await interaction.response.defer()
         await self.generate_image(interaction, "2:3")
 
     @discord.ui.button(label="3:2", style=discord.ButtonStyle.secondary)
     async def ratio_3_2(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await interaction.response.defer()
         await self.generate_image(interaction, "3:2")
 
     @discord.ui.button(label="4:5", style=discord.ButtonStyle.secondary)
     async def ratio_4_5(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await interaction.response.defer()
         await self.generate_image(interaction, "4:5")
 
     @discord.ui.button(label="5:4", style=discord.ButtonStyle.secondary)
     async def ratio_5_4(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await interaction.response.defer()
         await self.generate_image(interaction, "5:4")
 
     @discord.ui.button(label="9:16", style=discord.ButtonStyle.secondary)
     async def ratio_9_16(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await interaction.response.defer()
         await self.generate_image(interaction, "9:16")
 
     @discord.ui.button(label="9:21", style=discord.ButtonStyle.secondary)
     async def ratio_9_21(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await interaction.response.defer()
         await self.generate_image(interaction, "9:21")
+
+    def truncate_prompt(self, prompt, max_length=250):
+        if len(prompt) <= max_length:
+            return prompt
+        return prompt[:max_length] + "..."
 
     async def generate_image(self, interaction, aspect_ratio):
         try:
             model_name = "Stable Diffusion 3" if self.model == "sd" else "Replicate"
-            await interaction.response.defer(thinking=True)
-            self.aspect_ratio_message = await interaction.followup.send(f"Generating image with {model_name} (Aspect Ratio: {aspect_ratio})... This may take a minute or two.")
+            await interaction.edit_original_response(content=f"Generating image with {model_name} (Aspect Ratio: {aspect_ratio})... This may take a minute or two.", view=None)
             
             if self.model == "sd":
                 result = await image_generation.generate_image_sd(self.parent_view.prompt, aspect_ratio)
@@ -77,8 +89,6 @@ class AspectRatioView(discord.ui.View):
                 view = GenerateVideoView(self.parent_view.image_path)
                 
                 await interaction.edit_original_response(content=None, attachments=[file], embed=embed, view=view)
-                if self.aspect_ratio_message:
-                    await self.aspect_ratio_message.delete()  # Delete the aspect ratio message
                 self.parent_view.interaction_completed = True
                 self.parent_view.stop()
         except Exception as e:
@@ -91,8 +101,6 @@ class AspectRatioView(discord.ui.View):
         if not self.parent_view.interaction_completed:
             try:
                 await self.parent_view.interaction.edit_original_response(content="Image generation canceled due to timeout", view=None)
-                if self.aspect_ratio_message:
-                    await self.aspect_ratio_message.delete()  # Delete the aspect ratio message on timeout
             except discord.errors.NotFound:
                 pass
         self.stop()

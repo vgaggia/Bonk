@@ -18,6 +18,10 @@ replicate_api_token = os.getenv("REPLICATE_API_TOKEN")
 
 IMAGES_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))), 'images')
 os.makedirs(IMAGES_DIR, exist_ok=True)
+def truncate_prompt(self, prompt, max_length=250):
+    if len(prompt) <= max_length:
+        return prompt
+    return prompt[:max_length] + "..."
 
 async def generate_image_dalle(prompt):
     try:
