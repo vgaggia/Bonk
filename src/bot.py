@@ -4,7 +4,7 @@ import uuid
 import discord
 from discord import app_commands
 from src import responses, log
-from src.commands import chat, draw, imagine, model_3d, reset, help, music, tts  # Added import for tts
+from src.commands import chat, draw, imagine, model_3d, reset, help, music, tts
 from src.ui import draw_buttons, aspect_ratio_view, generate_video_view
 from dotenv import load_dotenv
 import anthropic
@@ -108,12 +108,25 @@ async def resume_command(interaction: discord.Interaction):
 async def next_command(interaction: discord.Interaction):
     await music.next(interaction)
 
-# New TTS command
 @tree.command(name="tts", description="Generate text-to-speech audio")
+@app_commands.describe(
+    text="The text to convert to speech",
+    voice="The voice to use for text-to-speech"
+)
+@app_commands.choices(voice=[
+    app_commands.Choice(name=voice, value=voice) for voice in tts.VOICES
+])
 @enqueue
-async def tts_command(interaction: discord.Interaction, text: str):
-    await tts.handle_tts(interaction, text)
-
+async def tts_command(interaction: discord.Interaction, text: str, voice: app_commands.Choice[str]):
+    try:
+        await tts.handle_tts(interaction, text, voice.value)
+    except Exception as e:
+        logger.error(f"Error in tts_command: {str(e)}")
+        if not interaction.response.is_done():
+            await interaction.response.send_message(f"An error occurred: {str(e)}")
+        else:
+            await interaction.followup.send(f"An error occurred: {str(e)}")
+            
 def run_discord_bot():
     TOKEN = os.getenv("DISCORD_BOT_TOKEN")
     client_instance.run(TOKEN)
