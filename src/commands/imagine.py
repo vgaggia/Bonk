@@ -6,8 +6,6 @@ from src.art import video_generation, utils
 logger = log.setup_logger(__name__)
 
 async def handle_imagine(interaction: discord.Interaction, user: discord.Member = None, attachment: discord.Attachment = None):
-    await interaction.response.defer(thinking=True)
-    
     try:
         image_url = None
 
@@ -39,6 +37,8 @@ async def handle_imagine(interaction: discord.Interaction, user: discord.Member 
             guild_members = interaction.guild.members
             random_user = random.choice(guild_members)
             image_url = random_user.avatar.url if random_user.avatar else random_user.default_avatar.url
+
+        await interaction.followup.send("Processing your image... This may take a moment.")
 
         image_path = await utils.download_image_from_url(image_url)
         video_path = await video_generation.image_to_video(image_path)

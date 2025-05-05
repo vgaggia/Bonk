@@ -1,63 +1,76 @@
 import os
 import logging
-import logging.handlers
+from logging.handlers import RotatingFileHandler
+from pathlib import Path
 
-class CustomFormatter(logging.Formatter):
-    LEVEL_COLORS = [
-        (logging.DEBUG, '\x1b[40;1m'),
-        (logging.INFO, '\x1b[34;1m'),
-        (logging.WARNING, '\x1b[33;1m'),
-        (logging.ERROR, '\x1b[31m'),
-        (logging.CRITICAL, '\x1b[41m'),
-    ]
-    FORMATS = {
-        level: logging.Formatter(
-            f'\x1b[30;1m%(asctime)s\x1b[0m {color}%(levelname)-8s\x1b[0m \x1b[35m%(name)s\x1b[0m -> %(message)s',
-            '%Y-%m-%d %H:%M:%S'
-        )
-        for level, color in LEVEL_COLORS
+class ColorFormatter(logging.Formatter):
+    """Simple color formatter for console output"""
+    COLORS = {
+        'DEBUG': '\033[37m',     # White
+        'INFO': '\033[94m',      # Blue
+        'WARNING': '\033[93m',   # Yellow
+        'ERROR': '\033[91m',     # Red
+        'CRITICAL': '\033[41m',  # Red background
+        'RESET': '\033[0m'       # Reset
     }
 
     def format(self, record):
-        formatter = self.FORMATS.get(record.levelno)
-        if formatter is None:
-            formatter = self.FORMATS[logging.DEBUG]
-
-        # Override the traceback to always print in red
+        # Add color to levelname
+        color = self.COLORS.get(record.levelname, self.COLORS['RESET'])
+        record.levelname = f"{color}{record.levelname:<8}{self.COLORS['RESET']}"
+        
+        # Format the message
+        message = super().format(record)
+        
+        # Color error traces in red
         if record.exc_info:
-            text = formatter.formatException(record.exc_info)
-            record.exc_text = f'\x1b[31m{text}\x1b[0m'
+            message += f"\n{self.COLORS['ERROR']}{self.formatException(record.exc_info)}{self.COLORS['RESET']}"
+            
+        return message
 
-        output = formatter.format(record)
-        # Remove the cache layer
-        record.exc_text = None
-        return output
-
-def setup_logger(module_name:str) -> logging.Logger:
-    # create logger
-    library, _, _ = module_name.partition('.py')
-    logger = logging.getLogger(library)
+def setup_logger(module_name: str) -> logging.Logger:
+    """Configure logging with console and file output
+    
+    Args:
+        module_name: Name of the module requesting the logger
+    Returns:
+        logging.Logger: Configured logger instance
+    """
+    # Create logger
+    logger = logging.getLogger(module_name.replace('.py', ''))
     logger.setLevel(logging.INFO)
-    # create console handler
+    
+    # Clear any existing handlers
+    logger.handlers.clear()
+    
+    # Console handler
     console_handler = logging.StreamHandler()
-    console_handler.setLevel(logging.INFO)
-    console_handler.setFormatter(CustomFormatter())
-    # Add console handler to logger
+    console_format = '%(asctime)s %(levelname)s %(name)s -> %(message)s'
+    console_handler.setFormatter(ColorFormatter(console_format))
     logger.addHandler(console_handler)
-
-    if os.getenv("LOGGING")=="True": #Check if logging is enabled
-        # specify that the log file path is the same as `main.py` file path
-        grandparent_dir = os.path.abspath(f"{__file__}/../../")
-        log_name='chatgpt_discord_bot.log'
-        log_path = os.path.join(grandparent_dir, log_name)
-        # create local log handler
-        log_handler = logging.handlers.RotatingFileHandler(
-            filename=log_path,
-            encoding='utf-8',
-            maxBytes=32 * 1024 * 1024,  # 32 MiB
-            backupCount=2,  # Rotate through 5 files
-        )
-        log_handler.setFormatter(CustomFormatter())
-        logger.addHandler(log_handler)
-
+    
+    # File handler (if enabled)
+    if os.getenv('LOGGING', '').lower() == 'true':
+        try:
+            # Setup log directory in project root
+            log_dir = Path(__file__).parent.parent / 'logs'
+            log_dir.mkdir(exist_ok=True)
+            log_file = log_dir / 'discord_bot.log'
+            
+            # Create rotating file handler
+            file_handler = RotatingFileHandler(
+                filename=log_file,
+                maxBytes=10 * 1024 * 1024,  # 10MB
+                backupCount=3,
+                encoding='utf-8'
+            )
+            
+            # Plain formatter for file output
+            file_format = '%(asctime)s %(levelname)-8s %(name)s -> %(message)s'
+            file_handler.setFormatter(logging.Formatter(file_format))
+            logger.addHandler(file_handler)
+            
+        except Exception as e:
+            logger.error(f"Failed to setup file logging: {e}")
+    
     return logger

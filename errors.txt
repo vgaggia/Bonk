@@ -1,0 +1,92 @@
+Errors
+
+These are the possible error messages from Dream Machine API
+Suggest Edits
+Before submission
+
+generation request object
+
+this is returned as errors in https://api.lumalabs.ai/dream-machine/v1/generations / create sdk function calls itself
+
+Prompt is required
+
+When image is not provided as keyframes, prompt is required.
+
+Prompt is too short, minimum length is 3 characters
+
+Prompt should be minimum 3 characters
+
+Prompt is too long, maximum length is 5000 characters
+
+Prompt should be maximum 5000 characters
+
+Loop is not supported for end frame
+
+When you pass an image in frame1 object and have loop enabled, it's not supported.
+
+Loop is not supported for keyframes
+
+When both frame0 and frame1 image urls are passed, loop is not supported
+
+Loop is not supported for extend reverse
+
+when frame1 is given (aka extend reverse) loop is not support`
+
+Loop is not supported for interpolate video to image
+
+Loop is not supported for interpolate image to video
+
+Loop is not supported for interpolate between two videos
+
+loop is not supported when doing interpolations
+
+No keyframes provided
+
+When frame0 and frame1 is passed as None/null
+
+Unknown request type
+
+When our server did not understand the request type.
+After submission
+
+generation object's failure_reason
+
+Moderation
+
+Contains blacklisted words
+
+If the prompt provided has has any blacklisted words
+
+Failed to read user input frames
+
+The images provided as keyframes are not accessible by our servers.
+
+Frame moderation failed
+
+Our image moderation system we run in our servers have determined that image url given for a keyframe is not suitable to proceed (in case you think other wise, please reach out to us via the form in our website)
+
+Advanced prompt moderation failed
+
+Our language moderation we run in our servers have determined that prompt given for the generation is not suitable to proceed (in case you think other wise, please reach out to us via the form in our website)
+
+Prompt
+
+Prompt processing failed
+
+Our language system ran into issues processing the prompt
+
+Job
+
+Error dispatching job
+
+Our api failed to dispatch the job for the generation
+
+Job failed
+
+The job failed on the GPU server (please report to use via the form in website if you see this)
+
+Error processing callback
+
+The job server failed to process the callback (please report to use via the form in website if you see this)
+
+Updated 22 days ago 
