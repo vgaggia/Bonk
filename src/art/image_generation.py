@@ -165,3 +165,139 @@ async def generate_image_replicate(prompt, aspect_ratio):
     except Exception as e:
         logger.error(f"Error generating image from Replicate: {str(e)}")
         return display_error(e)
+
+# --- GPT Image 1 Integration ---
+# Aspect ratio mapping for OpenAI Images API
+_ASPECT_RATIO_TO_SIZE = {
+    "1:1": "1024x1024",
+    "16:9": "1536x864",
+    "9:16": "864x1536",
+    "4:5": "1024x1280",
+    "5:4": "1280x1024",
+    "3:2": "1536x1024",
+    "2:3": "1024x1536",
+    "21:9": "1536x672",
+    "9:21": "672x1536"
+}
+
+async def generate_image_gpt_image_1(prompt, aspect_ratio):
+    try:
+        logger.debug(f"Generating image with GPT Image 1. Prompt: {prompt}, Aspect Ratio: {aspect_ratio}")
+        size = _ASPECT_RATIO_TO_SIZE.get(aspect_ratio, "1024x1024")
+        
+        # Direct API call with better logging
+        logger.info(f"Calling OpenAI API with model=gpt-image-1, size={size}")
+        try:
+            response = openai_client.images.generate(
+                model="gpt-image-1",
+                prompt=prompt,
+                size=size,
+                n=1,
+            )
+            logger.info(f"OpenAI API response received: {response}")
+        except Exception as api_error:
+            logger.error(f"OpenAI API call failed: {str(api_error)}")
+            raise Exception(f"Image generation failed: {str(api_error)}")
+
+        # Handle both URL and base64 responses
+        if not response or not hasattr(response, 'data') or not response.data or not response.data[0]:
+            logger.error("OpenAI API returned invalid response")
+            raise Exception("No response received from OpenAI API")
+
+        image_url = getattr(response.data[0], "url", None)
+        b64_json = getattr(response.data[0], "b64_json", None)
+
+        if image_url:
+            logger.debug(f"GPT Image 1 image generated successfully. URL: {image_url}")
+            try:
+                img_response = requests.get(image_url, timeout=10)
+                img_response.raise_for_status()
+                image_data = img_response.content
+            except requests.exceptions.RequestException as e:
+                logger.error(f"Error downloading image from URL {image_url}: {str(e)}")
+                raise Exception(f"Error downloading the generated image: {str(e)}")
+        elif b64_json:
+            logger.debug("GPT Image 1 image generated as base64, decoding and saving as PNG.")
+            import base64
+            image_data = base64.b64decode(b64_json)
+        else:
+            logger.error("No image URL or base64 data found in OpenAI API response")
+            raise Exception("No image URL or base64 data in OpenAI API response")
+
+        image_hash = hashlib.md5(image_data).hexdigest()
+        image_filename = f"{image_hash}.png"
+        image_path = os.path.join(IMAGES_DIR, image_filename)
+
+        with open(image_path, "wb") as file:
+            file.write(image_data)
+
+        return image_data, image_path
+    except Exception as e:
+        logger.error(f"Error generating image from GPT Image 1: {str(e)}")
+        return display_error(e)
+
+# --- GPT Image 1 Edit Integration ---
+async def generate_image_gpt_image_1_edit(image_path, instruction, aspect_ratio):
+    try:
+        logger.debug(f"Editing image with GPT Image 1. Edit: {instruction}, Aspect Ratio: {aspect_ratio}")
+        size = _ASPECT_RATIO_TO_SIZE.get(aspect_ratio, "1024x1024")
+        
+        # Read the image file
+        with open(image_path, "rb") as img_file:
+            image_bytes = img_file.read()
+
+        # Set up a BytesIO with a .name attribute for mimetype detection
+        image_file = io.BytesIO(image_bytes)
+        image_file.name = "image.png"
+
+        # Direct API call with better logging
+        logger.info(f"Calling OpenAI Edit API with model=gpt-image-1, size={size}")
+        try:
+            response = openai_client.images.edit(
+                model="gpt-image-1",
+                image=image_file,
+                prompt=instruction,
+                size=size,
+                n=1,
+            )
+            logger.info(f"OpenAI Edit API response received: {response}")
+        except Exception as api_error:
+            logger.error(f"OpenAI Edit API call failed: {str(api_error)}")
+            raise Exception(f"Image editing failed: {str(api_error)}")
+
+        # Handle both URL and base64 responses
+        if not response or not hasattr(response, 'data') or not response.data or not response.data[0]:
+            logger.error("OpenAI Edit API returned invalid response")
+            raise Exception("No response received from OpenAI Edit API")
+
+        image_url = getattr(response.data[0], "url", None)
+        b64_json = getattr(response.data[0], "b64_json", None)
+
+        if image_url:
+            logger.debug(f"GPT Image 1 image edit generated successfully. URL: {image_url}")
+            try:
+                img_response = requests.get(image_url, timeout=10)
+                img_response.raise_for_status()
+                image_data = img_response.content
+            except requests.exceptions.RequestException as e:
+                logger.error(f"Error downloading edited image from URL {image_url}: {str(e)}")
+                raise Exception(f"Error downloading the edited image: {str(e)}")
+        elif b64_json:
+            logger.debug("GPT Image 1 image edit generated as base64, decoding and saving as PNG.")
+            import base64
+            image_data = base64.b64decode(b64_json)
+        else:
+            logger.error("No image URL or base64 data found in OpenAI Edit API response")
+            raise Exception("No image URL or base64 data in OpenAI Edit API response")
+
+        image_hash = hashlib.md5(image_data).hexdigest()
+        image_filename = f"{image_hash}.png"
+        new_image_path = os.path.join(IMAGES_DIR, image_filename)
+
+        with open(new_image_path, "wb") as file:
+            file.write(image_data)
+
+        return image_data, new_image_path
+    except Exception as e:
+        logger.error(f"Error editing image with GPT Image 1: {str(e)}")
+        return display_error(e)

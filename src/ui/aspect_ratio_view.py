@@ -78,13 +78,22 @@ class AspectRatioView(discord.ui.View):
 
     async def generate_image(self, interaction, aspect_ratio):
         try:
-            model_name = "Stable Diffusion 3" if self.model == "sd" else "Replicate"
-            await interaction.edit_original_response(content=f"Generating image with {model_name} (Aspect Ratio: {aspect_ratio})... This may take a minute or two.", view=None)
-            
             if self.model == "sd":
+                model_name = "Stable Diffusion 3"
+                await interaction.edit_original_response(content=f"Generating image with {model_name} (Aspect Ratio: {aspect_ratio})... This may take a minute or two.", view=None)
                 result = await image_generation.generate_image_sd(self.parent_view.prompt, aspect_ratio)
-            else:
+            elif self.model == "replicate":
+                model_name = "Replicate"
+                await interaction.edit_original_response(content=f"Generating image with {model_name} (Aspect Ratio: {aspect_ratio})... This may take a minute or two.", view=None)
                 result = await image_generation.generate_image_replicate(self.parent_view.prompt, aspect_ratio)
+            elif self.model == "gpt-image-1":
+                model_name = "GPT Image 1"
+                # Don't edit the response here, let the parent view handle it
+                self.parent_view.aspect_ratio = aspect_ratio  # Store the aspect ratio
+                await self.parent_view.generate_gpt_image_1_image(interaction, aspect_ratio)
+                return
+            else:
+                raise Exception(f"Unknown model: {self.model}")
 
             if isinstance(result, str):
                 # This is an error message
