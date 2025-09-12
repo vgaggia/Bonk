@@ -3,6 +3,7 @@ import certifi
 import discord
 from discord import app_commands
 from src import responses, log
+from src.health_check import health_check
 from src.commands import chat, draw, imagine, model_3d, reset, help, music, tts, clear, video
 from src.ui import draw_buttons, aspect_ratio_view, generate_video_view
 from src.error_handler import handle_error
@@ -39,9 +40,14 @@ tree = app_commands.CommandTree(client_instance)
 async def on_ready():
     """Handle bot startup"""
     try:
+        # Run health checks first
+        await health_check()
+        
+        # Sync commands
         await tree.sync()
         logger.info(f'{client_instance.user} is now running!')
         logger.info("Synced application commands")
+        logger.info("✅ Bot startup completed successfully")
     except Exception as e:
         logger.error(f"Error during startup: {str(e)}")
         raise

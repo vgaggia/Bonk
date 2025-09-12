@@ -1,4 +1,3 @@
-#This bot is shit
 import os
 import anthropic
 import requests
@@ -14,9 +13,10 @@ logger = logging.getLogger(__name__)
 load_dotenv()
 
 # Constants
-CLAUDE_MODEL = "claude-3-5-sonnet-20240620"
+CLAUDE_MODEL = "claude-sonnet-4-20250514"  # Updated to latest Claude 4 model
 MAX_TOKENS = 1000
-PROMPT_MAX_TOKENS = 100
+PROMPT_MAX_TOKENS = 200  # Increased for better prompt enhancement
+MAX_MESSAGE_LENGTH = 4000  # Discord limit consideration
 LOCAL_API_BASE = os.getenv("LOCAL_API_BASE", "http://127.0.0.1:5000/v1")
 LOCAL_SYSTEM_PROMPT = os.getenv("LOCAL_SYSTEM_PROMPT", "Act lively, and do your best to emulate being vgaggia, don't say sentences too short. And also your in a playful mood. The following is an emulated conversation with vgaggia:")
 
@@ -139,11 +139,11 @@ class ModelAPIs:
 
 async def handle_response(message, model=None, user_id=None) -> str:
     """Handle user message and get AI response with model selection and message history"""
-    if not message.strip():
+    if not message or not message.strip():
         raise ValueError("Message cannot be empty")
 
     # Get the user's preferred model if none specified
-    if model is None and user_id in user_model_preferences:
+    if model is None and user_id and user_id in user_model_preferences:
         model = user_model_preferences.get(user_id)
     elif model is None:
         model = 'anthropic'  # Default if no preference exists
@@ -165,6 +165,8 @@ async def handle_response(message, model=None, user_id=None) -> str:
             )
         elif model == 'gpt-4o':
             gpt4o_key = os.getenv("OPENAI_API_KEY")
+            if not gpt4o_key:
+                raise APIError("OpenAI API key not configured")
             return await ModelAPIs.openai_like_api(
                 "https://api.openai.com/v1", 
                 gpt4o_key, 
@@ -173,7 +175,7 @@ async def handle_response(message, model=None, user_id=None) -> str:
                 user_id
             )
         elif model == 'local-model':
-            local_key = os.getenv("LOCAL_MODEL_API_KEY")  # Don't use empty string fallback
+            local_key = os.getenv("LOCAL_MODEL_API_KEY")  # Optional for local models
             return await ModelAPIs.openai_like_api(
                 LOCAL_API_BASE, 
                 local_key, 

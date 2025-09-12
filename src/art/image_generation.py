@@ -23,13 +23,31 @@ def truncate_prompt(self, prompt, max_length=250):
         return prompt
     return prompt[:max_length] + "..."
 
-async def generate_image_dalle(prompt):
+# --- DALL-E 3 Integration with Aspect Ratio Support ---
+# DALL-E 3 supported sizes mapping from aspect ratios
+# DALL-E 3 only supports: 1024x1024, 1024x1792, 1792x1024
+_DALLE_ASPECT_RATIO_TO_SIZE = {
+    "1:1": "1024x1024",   # Native square
+    "16:9": "1792x1024",  # Landscape - close to 16:9 
+    "9:16": "1024x1792",  # Portrait - close to 9:16
+    "4:5": "1024x1792",   # Portrait - closest available 
+    "5:4": "1792x1024",   # Landscape - closest available
+    "3:2": "1792x1024",   # Landscape - close to 3:2
+    "2:3": "1024x1792",   # Portrait - close to 2:3  
+    "21:9": "1792x1024",  # Ultra-wide landscape
+    "9:21": "1024x1792"   # Ultra-tall portrait
+}
+
+async def generate_image_dalle(prompt, aspect_ratio=None):
     try:
-        logger.debug(f"Generating image with DALL-E 3. Prompt: {prompt}")
+        # Default to square if no aspect ratio provided (for backward compatibility)
+        size = "1024x1024" if aspect_ratio is None else _DALLE_ASPECT_RATIO_TO_SIZE.get(aspect_ratio, "1024x1024")
+        
+        logger.debug(f"Generating image with DALL-E 3. Prompt: {prompt}, Size: {size}")
         response = openai_client.images.generate(
             model="dall-e-3",
             prompt=prompt,
-            size="1024x1024",
+            size=size,
             quality="standard",
             n=1,
         )
@@ -111,35 +129,91 @@ async def generate_image_sd(prompt, aspect_ratio):
         logger.error(f"Error generating image from Stability AI: {str(e)}")
         return display_error(e)
 
-async def generate_image_replicate(prompt, aspect_ratio):
+async def generate_image_replicate(prompt, aspect_ratio, model_id="black-forest-labs/flux-schnell"):
     try:
-        logger.debug(f"Generating image with Replicate (black-forest-labs/flux-schnell). Prompt: {prompt}, Aspect Ratio: {aspect_ratio}")
+        logger.debug(f"Generating image with Replicate ({model_id}). Prompt: {prompt}, Aspect Ratio: {aspect_ratio}")
         
-        prediction = replicate.run(
-            "black-forest-labs/flux-schnell",
-            input={
-                "prompt": prompt,
-                "aspect_ratio": aspect_ratio,
+        # Default input parameters that work with most models
+        input_params = {
+            "prompt": prompt,
+        }
+        
+        # Add aspect ratio if supported (mainly for newer models)
+        if "flux" in model_id.lower() or "sdxl" in model_id.lower():
+            input_params["aspect_ratio"] = aspect_ratio
+        
+        # Model-specific parameters
+        if "flux-schnell" in model_id:
+            input_params.update({
                 "steps": 25,
                 "guidance": 3,
                 "interval": 2,
                 "output_format": "webp",
                 "output_quality": 100,
                 "disable_safety_checker": True,
-            }
-        )
+            })
+        elif "flux-dev" in model_id:
+            input_params.update({
+                "guidance": 3.5,
+                "num_outputs": 1,
+                "output_format": "webp",
+                "output_quality": 100
+            })
+        elif "sdxl" in model_id:
+            input_params.update({
+                "width": 1024,
+                "height": 1024,
+                "num_outputs": 1,
+                "scheduler": "K_EULER",
+                "num_inference_steps": 50,
+                "guidance_scale": 7.5
+            })
+        
+        prediction = replicate.run(model_id, input=input_params)
+        
+        logger.debug(f"Raw prediction from Replicate: {prediction} (type: {type(prediction)})")
 
-        if isinstance(prediction, list) and len(prediction) > 0:
-            output_url = prediction[0]
+        # Handle various Replicate output formats
+        output_url = None
+        
+        if isinstance(prediction, list):
+            # List of outputs - take the first one
+            if len(prediction) > 0:
+                output_url = prediction[0]
+            else:
+                raise Exception("Empty output list from Replicate")
         elif isinstance(prediction, str):
+            # Direct string URL
             output_url = prediction
         else:
-            raise Exception(f"Unexpected output format: {prediction}")
-
+            # Try to extract URL from object (FileOutput, etc.)
+            output_url = prediction
+        
+        # Handle FileOutput objects and other objects with URL attributes
+        if hasattr(output_url, 'url'):
+            output_url = output_url.url
+        elif hasattr(output_url, 'read') and hasattr(output_url, '__str__'):
+            # FileOutput object - convert to string to get URL
+            output_url = str(output_url)
+        elif not isinstance(output_url, str):
+            # Try to convert to string
+            try:
+                output_url = str(output_url)
+            except:
+                raise Exception(f"Cannot extract URL from output: {type(output_url)} - {output_url}")
+        
+        # Validate the URL
+        if not isinstance(output_url, str):
+            raise Exception(f"Invalid output URL format after processing: {type(output_url)}")
+        
         if not output_url.startswith(('http://', 'https://')):
             if 'error' in output_url.lower() and 'safety' in output_url.lower():
                 raise ContentModerationError("The image was flagged by content moderation.")
             raise Exception(f"Invalid image URL returned: {output_url}")
+        
+        # Additional validation - make sure it looks like a proper URL
+        if not ('.' in output_url and len(output_url) > 10):
+            raise Exception(f"Malformed image URL: {output_url}")
 
         logger.debug(f"Replicate image generated successfully. URL: {output_url}")
         

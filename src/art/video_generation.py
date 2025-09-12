@@ -86,4 +86,6 @@ async def image_to_video(image_path):
 
     except Exception as e:
         logger.error(f"Error generating video: {str(e)}")
-        return display_error(e)
+        # Raise the exception instead of returning error message
+        # This makes error handling clearer in the calling code
+        raise e
