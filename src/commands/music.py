@@ -1,11 +1,12 @@
-import discord
-from discord import app_commands
-import yt_dlp
 import asyncio
 import os
-import threading
-from src import log
+
+import discord
+import yt_dlp
 from youtubesearchpython import VideosSearch
+
+from src import log
+from src.voice import connect_to_user_channel, ensure_opus, ffmpeg_available, ffmpeg_executable
 
 logger = log.setup_logger(__name__)
 
@@ -51,7 +52,34 @@ class MusicPlayer:
         self.is_playing = True
 
         if not self.voice_client or not self.voice_client.is_connected():
-            self.voice_client = await interaction.user.voice.channel.connect()
+            try:
+                self.voice_client = await connect_to_user_channel(interaction)
+            except discord.Forbidden as e:
+                await interaction.followup.send(
+                    f"I lack voice permissions in this channel ({e}). Please grant CONNECT and SPEAK.")
+                self.is_playing = False
+                return
+            except Exception as e:
+                await interaction.followup.send(
+                    "Couldn’t connect to voice (code 4006). Try a different voice channel or region,"
+                    " and ensure your network allows UDP traffic to Discord voice.")
+                logger.error(f"Voice connect error: {e}")
+                self.is_playing = False
+                return
+
+        # Pre-flight checks for audio stack
+        if not ensure_opus():
+            await interaction.followup.send(
+                "Audio prerequisites missing: Opus not loaded. Install Opus and PyNaCl, then restart the bot.")
+            await self.voice_client.disconnect()
+            self.is_playing = False
+            return
+        if not ffmpeg_available():
+            await interaction.followup.send(
+                "FFmpeg not found. Install FFmpeg and ensure it's on PATH or set FFMPEG_BIN.")
+            await self.voice_client.disconnect()
+            self.is_playing = False
+            return
 
         try:
             is_live = await self.is_livestream(self.current_song['url'])
@@ -71,7 +99,9 @@ class MusicPlayer:
             info = ydl.extract_info(self.current_song['url'], download=False)
             url = info['url']
 
-        audio_source = discord.FFmpegPCMAudio(url, **self.livestream_ffmpeg_options)
+        audio_source = discord.FFmpegPCMAudio(
+            url, executable=ffmpeg_executable(), **self.livestream_ffmpeg_options
+        )
         self.voice_client.play(audio_source, after=lambda e: asyncio.run_coroutine_threadsafe(self.song_finished(interaction), interaction.client.loop))
         await interaction.followup.send(f"Now streaming: {self.current_song['title']}")
         logger.info(f"Started streaming: {self.current_song['title']}")
@@ -80,7 +110,9 @@ class MusicPlayer:
         with yt_dlp.YoutubeDL(self.ydl_opts) as ydl:
             ydl.download([self.current_song['url']])
 
-        audio_source = discord.FFmpegPCMAudio('temp_audio.mp3', **self.ffmpeg_options)
+        audio_source = discord.FFmpegPCMAudio(
+            'temp_audio.mp3', executable=ffmpeg_executable(), **self.ffmpeg_options
+        )
         self.voice_client.play(audio_source, after=lambda e: asyncio.run_coroutine_threadsafe(self.song_finished(interaction), interaction.client.loop))
         await interaction.followup.send(f"Now playing: {self.current_song['title']}")
         logger.info(f"Started playing: {self.current_song['title']}")
@@ -99,10 +131,23 @@ async def play(interaction: discord.Interaction, query: str):
         return
 
     channel = interaction.user.voice.channel
-    if not music_player.voice_client:
-        music_player.voice_client = await channel.connect()
-    elif music_player.voice_client.channel != channel:
-        await music_player.voice_client.move_to(channel)
+    if (
+        not music_player.voice_client
+        or not music_player.voice_client.is_connected()
+        or music_player.voice_client.channel != channel
+    ):
+        try:
+            music_player.voice_client = await connect_to_user_channel(interaction)
+        except discord.Forbidden as e:
+            await interaction.followup.send(
+                f"I lack voice permissions in this channel ({e}). Please grant CONNECT and SPEAK.")
+            return
+        except Exception as e:
+            await interaction.followup.send(
+                "Couldn’t connect to voice (code 4006). Try a different voice channel or region,"
+                " and ensure your network allows UDP traffic to Discord voice.")
+            logger.error(f"Voice connect error: {e}")
+            return
 
     try:
         if not query.startswith('http://') and not query.startswith('https://'):

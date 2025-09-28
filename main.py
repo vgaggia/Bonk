@@ -1,9 +1,4 @@
-import importlib
-import sys
-from src import log
-from dotenv import load_dotenv
-
+from src import bot
 
 if __name__ == '__main__':
-    from src import bot
     bot.run_discord_bot()

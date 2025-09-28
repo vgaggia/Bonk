@@ -1,10 +1,10 @@
-import replicate
+import asyncio
 import logging
 import os
-from typing import List, Dict, Optional
-import asyncio
+from typing import Dict, List, Optional
+
+import replicate
 import requests
-from .error_handler import display_error
 
 logger = logging.getLogger(__name__)
 

@@ -1,6 +1,7 @@
 import logging
-from openai import OpenAIError
+
 import requests
+from openai import OpenAIError
 
 logger = logging.getLogger(__name__)
 

@@ -1,13 +1,14 @@
-import os
-import requests
-import io
-from PIL import Image
-import replicate
-import logging
 import hashlib
-from openai import OpenAI
+import io
+import logging
+import os
+
+import replicate
+import requests
 from dotenv import load_dotenv
-from .error_handler import display_error, ContentModerationError
+from openai import OpenAI
+
+from .error_handler import ContentModerationError, display_error
 
 load_dotenv()
 logger = logging.getLogger(__name__)
@@ -199,8 +200,10 @@ async def generate_image_replicate(prompt, aspect_ratio, model_id="black-forest-
             # Try to convert to string
             try:
                 output_url = str(output_url)
-            except:
-                raise Exception(f"Cannot extract URL from output: {type(output_url)} - {output_url}")
+            except Exception as exc:
+                raise Exception(
+                    f"Cannot extract URL from output: {type(output_url)} - {output_url}"
+                ) from exc
         
         # Validate the URL
         if not isinstance(output_url, str):

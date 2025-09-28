@@ -1,10 +1,12 @@
 import io
+
 import discord
+
 from src import log
 from src.art import image_generation
+from src.art.error_handler import ContentModerationError
 from src.ui.aspect_ratio_view import AspectRatioView
 from src.ui.generate_video_view import GenerateVideoView
-from src.art.error_handler import ContentModerationError
 
 logger = log.setup_logger(__name__)
 
@@ -113,7 +115,7 @@ class DrawButtons(discord.ui.View):
         except Exception as e:
             logger.error(f"Error in generate_gpt_image_1_image: {str(e)}")
             try:
-                await interaction.edit_original_response(content=f"> **Error: An unexpected error occurred while generating the image with GPT Image 1.**", view=None)
+                await interaction.edit_original_response(content="> **Error: An unexpected error occurred while generating the image with GPT Image 1.**", view=None)
             except (discord.errors.NotFound, discord.errors.InteractionResponded):
                 logger.warning("Cannot edit interaction response - interaction expired or already responded")
             self.interaction_completed = True
@@ -259,9 +261,15 @@ class IterateImageView(discord.ui.View):
         except Exception as e:
             logger.error(f"Error in iterate button: {str(e)}")
             try:
-                await interaction.response.send_message("An error occurred while trying to open the iterate modal. Please try again.", ephemeral=True)
-            except:
-                await interaction.followup.send("An error occurred while trying to open the iterate modal. Please try again.", ephemeral=True)
+                await interaction.response.send_message(
+                    "An error occurred while trying to open the iterate modal. Please try again.",
+                    ephemeral=True,
+                )
+            except Exception:
+                await interaction.followup.send(
+                    "An error occurred while trying to open the iterate modal. Please try again.",
+                    ephemeral=True,
+                )
 
     async def on_timeout(self):
         """Handle view timeout by disabling the button"""

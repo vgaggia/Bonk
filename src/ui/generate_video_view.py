@@ -1,5 +1,7 @@
 import os
+
 import discord
+
 from src import log
 from src.art import video_generation
 

@@ -1,7 +1,7 @@
 import uuid
-from src import responses, log
+
+from src import log, responses
 from src.commands import tts
-import discord
 
 logger = log.setup_logger(__name__)
 

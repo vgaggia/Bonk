@@ -1,7 +1,6 @@
 class ContentModerationError(Exception):
     pass
 
-import traceback
 
 def handle_error(error):
     error_type = type(error).__name__

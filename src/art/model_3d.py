@@ -1,8 +1,11 @@
 import os
-import requests
+
 import discord
+import requests
+
 from src import log
 from src.art import utils
+
 from .error_handler import display_error
 
 logger = log.setup_logger(__name__)

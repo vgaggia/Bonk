@@ -1,9 +1,11 @@
+import logging
 import os
+
 import anthropic
 import requests
 from dotenv import load_dotenv
-import logging
-from .error_handler import handle_error, APIError
+
+from .error_handler import APIError, handle_error
 from .message_history import MessageHistory
 
 # Set up logging

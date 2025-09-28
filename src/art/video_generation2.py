@@ -1,10 +1,12 @@
-import os
-import requests
-import io
-from PIL import Image
-import time
 import hashlib
+import io
 import logging
+import os
+import time
+
+import requests
+from PIL import Image
+
 from .error_handler import display_error
 
 logger = logging.getLogger(__name__)
@@ -46,10 +48,9 @@ async def image_to_video(image_path):
                 "image": ("image.png", img_byte_arr, "image/png")
             },
             data={
-                "motion_bucket_id": 128,
+                "motion_bucket_id": 127,
                 "seed": 0,
-                "cfg_scale": 1.8,
-                "motion_bucket_id": 127
+                "cfg_scale": 1.8
             }
         )
 

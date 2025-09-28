@@ -1,7 +1,8 @@
 from collections import defaultdict, deque
 from dataclasses import dataclass
-from typing import Dict, Deque
 from datetime import datetime
+from typing import Deque, Dict
+
 
 @dataclass
 class Message:

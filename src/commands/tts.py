@@ -1,10 +1,13 @@
-import discord
-from discord import app_commands
+import asyncio
 import os
 from pathlib import Path
+
+import discord
+from discord import app_commands
 from openai import OpenAI
+
 from src import log, responses
-import asyncio
+from src.voice import connect_to_user_channel, ensure_opus, ffmpeg_available, ffmpeg_executable
 
 logger = log.setup_logger(__name__)
 
@@ -23,7 +26,7 @@ async def generate_speech(text: str, voice: str) -> Path:
     return speech_file_path
 
 async def play_audio(voice_client, audio_path):
-    audio_source = discord.FFmpegPCMAudio(audio_path)
+    audio_source = discord.FFmpegPCMAudio(audio_path, executable=ffmpeg_executable())
     if not voice_client.is_playing():
         voice_client.play(audio_source, after=lambda e: print('Player error: %s' % e) if e else None)
         while voice_client.is_playing():
@@ -49,12 +52,32 @@ async def handle_tts(interaction: discord.Interaction, text: str, voice: str, en
             await interaction.followup.send("You need to be in a voice channel to use this command.")
             return
 
+        # Pre-flight checks for audio stack
+        if not ensure_opus():
+            await interaction.followup.send(
+                "Audio prerequisites missing: Opus not loaded. Install Opus and PyNaCl, then restart the bot.")
+            return
+        if not ffmpeg_available():
+            await interaction.followup.send(
+                "FFmpeg not found. Install FFmpeg and ensure it's on PATH or set FFMPEG_BIN.")
+            return
+
         # Generate speech
         audio_file = await generate_speech(text, voice)
 
         # Join voice channel
-        voice_channel = interaction.user.voice.channel
-        voice_client = await voice_channel.connect()
+        try:
+            voice_client = await connect_to_user_channel(interaction)
+        except discord.Forbidden as e:
+            await interaction.followup.send(
+                f"I lack voice permissions in this channel ({e}). Please grant CONNECT and SPEAK.")
+            return
+        except Exception as e:
+            await interaction.followup.send(
+                "Couldn’t connect to voice (code 4006). Try a different voice channel or region,"
+                " and ensure your network allows UDP traffic to Discord voice.")
+            logger.error(f"Voice connect error: {e}")
+            return
 
         # Play audio
         await play_audio(voice_client, audio_file)
@@ -82,8 +105,18 @@ async def handle_tts_for_chat(interaction: discord.Interaction, text: str):
         audio_file = await generate_speech(text, "alloy")
 
         # Join voice channel
-        voice_channel = interaction.user.voice.channel
-        voice_client = await voice_channel.connect()
+        try:
+            voice_client = await connect_to_user_channel(interaction)
+        except discord.Forbidden as e:
+            await interaction.followup.send(
+                f"I lack voice permissions in this channel ({e}). Please grant CONNECT and SPEAK.")
+            return
+        except Exception as e:
+            await interaction.followup.send(
+                "Couldn’t connect to voice (code 4006). Try a different voice channel or region,"
+                " and ensure your network allows UDP traffic to Discord voice.")
+            logger.error(f"Voice connect error: {e}")
+            return
 
         # Play audio
         await play_audio(voice_client, audio_file)

@@ -1,9 +1,9 @@
 import logging
-from openai import OpenAIError
-import requests
-import discord
+
 import anthropic
-import asyncio
+import discord
+import requests
+from openai import OpenAIError
 
 logger = logging.getLogger(__name__)
 
@@ -15,13 +15,16 @@ class APIError(Exception):
         super().__init__(message)
         self.status_code = status_code
 
-def handle_interaction_error(interaction: discord.Interaction, error: Exception) -> None:
-    """Handle errors for Discord interactions"""
+async def handle_interaction_error(interaction: discord.Interaction, error: Exception) -> None:
+    """Handle errors for Discord interactions (async-safe)."""
     error_message = handle_error(error)
-    if not interaction.response.is_done():
-        asyncio.create_task(interaction.response.send_message(error_message))
-    else:
-        asyncio.create_task(interaction.followup.send(error_message))
+    try:
+        if not interaction.response.is_done():
+            await interaction.response.send_message(error_message, ephemeral=True)
+        else:
+            await interaction.followup.send(error_message, ephemeral=True)
+    except Exception as send_err:
+        logger.error(f"Failed to send interaction error message: {send_err}")
 
 def handle_error(error, error_type=None):
     """Centralized error handling for all API and general errors"""

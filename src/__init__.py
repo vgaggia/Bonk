@@ -1,7 +1,19 @@
-from . import bot
-from . import log
-from . import personas
-from . import responses
-from .art import image_generation, video_generation, model_3d, utils
-from .commands import chat, draw, imagine, model_3d, reset, help, music, video
-from .ui import draw_buttons, aspect_ratio_view, generate_video_view
+from . import bot as bot
+from . import log as log
+from . import personas as personas
+from . import responses as responses
+from .art import image_generation as image_generation
+from .art import model_3d as art_model_3d
+from .art import utils as utils
+from .art import video_generation as video_generation
+from .commands import chat as chat
+from .commands import draw as draw
+from .commands import help as help
+from .commands import imagine as imagine
+from .commands import model_3d as command_model_3d
+from .commands import music as music
+from .commands import reset as reset
+from .commands import video as video
+from .ui import aspect_ratio_view as aspect_ratio_view
+from .ui import draw_buttons as draw_buttons
+from .ui import generate_video_view as generate_video_view

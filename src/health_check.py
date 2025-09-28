@@ -1,5 +1,6 @@
-import os
 import logging
+import os
+
 from src.error_handler import APIError
 
 logger = logging.getLogger(__name__)
@@ -31,9 +32,9 @@ async def health_check():
     
     # Test Anthropic API connection
     try:
-        from src.responses import anthropic_client, CLAUDE_MODEL
+        from src.responses import CLAUDE_MODEL, anthropic_client
         # Simple test request
-        test_response = anthropic_client.messages.create(
+        anthropic_client.messages.create(
             model=CLAUDE_MODEL,
             max_tokens=10,
             messages=[{"role": "user", "content": "test"}]

@@ -1,5 +1,7 @@
 import io
+
 import discord
+
 from src import log
 from src.art import image_generation
 from src.ui.generate_video_view import GenerateVideoView
@@ -134,7 +136,7 @@ class AspectRatioView(discord.ui.View):
         except Exception as e:
             logger.exception(f"Error in generate_image: {str(e)}")
             try:
-                await interaction.edit_original_response(content=f"> **Error: An error occurred while generating the image.**", view=None)
+                await interaction.edit_original_response(content="> **Error: An error occurred while generating the image.**", view=None)
             except (discord.errors.NotFound, discord.errors.InteractionResponded):
                 logger.warning("Cannot edit interaction response - interaction expired or already responded")
             self.parent_view.interaction_completed = True

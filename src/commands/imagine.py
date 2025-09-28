@@ -1,7 +1,9 @@
-import discord
 import random
+
+import discord
+
 from src import log
-from src.art import video_generation, utils
+from src.art import utils, video_generation
 
 logger = log.setup_logger(__name__)
 

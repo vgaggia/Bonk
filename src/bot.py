@@ -1,17 +1,17 @@
 import os
+
+import anthropic
 import certifi
 import discord
 from discord import app_commands
-from src import responses, log
-from src.health_check import health_check
-from src.commands import chat, draw, imagine, model_3d, reset, help, music, tts, clear, video
-from src.ui import draw_buttons, aspect_ratio_view, generate_video_view
-from src.error_handler import handle_error
-from src.queue_manager import enqueue
 from dotenv import load_dotenv
-import anthropic
 from openai import OpenAI
-import logging
+
+from src import log
+from src.commands import chat, clear, draw, help, imagine, model_3d, music, reset, tts, video
+from src.error_handler import handle_error
+from src.health_check import health_check
+from src.queue_manager import enqueue
 
 # Setup
 load_dotenv()
@@ -32,6 +32,7 @@ except Exception as e:
 intents = discord.Intents.default()
 intents.message_content = True
 intents.members = True
+intents.voice_states = True
 
 client_instance = discord.Client(intents=intents)
 tree = app_commands.CommandTree(client_instance)

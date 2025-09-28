@@ -1,7 +1,8 @@
-import os
 import logging
+import os
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
+
 
 class ColorFormatter(logging.Formatter):
     """Simple color formatter for console output"""

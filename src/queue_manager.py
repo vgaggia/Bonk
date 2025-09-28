@@ -1,7 +1,9 @@
 import asyncio
-import discord
-from functools import wraps
 import logging
+from functools import wraps
+
+import discord
+
 from .error_handler import handle_interaction_error
 
 logger = logging.getLogger(__name__)
@@ -70,7 +72,8 @@ def enqueue(func):
             raise ValueError("Could not find discord.Interaction in arguments")
         
         logger.debug(f"Enqueueing command {func.__name__} for interaction {interaction.id}")
-        task = lambda: func(*args, **kwargs)
+        def task():
+            return func(*args, **kwargs)
         await queue_manager.add_to_queue(interaction, task)
     
     return wrapper

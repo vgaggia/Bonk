@@ -1,7 +1,9 @@
+import os
+
 import discord
 import replicate
-import os
 import requests
+
 from src import log
 from src.art.error_handler import display_error
 from src.ui.aspect_ratio_view import AspectRatioView
@@ -108,7 +110,7 @@ class VideoButtons(discord.ui.View):
             for file in video_files:
                 try:
                     os.remove(file.fp.name)
-                except:
+                except Exception:
                     pass
 
             self.interaction_completed = True

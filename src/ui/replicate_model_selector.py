@@ -1,7 +1,8 @@
+
 import discord
-import asyncio
+
 from src import log
-from src.art.replicate_models import search_replicate_models, get_popular_replicate_models
+from src.art.replicate_models import get_popular_replicate_models, search_replicate_models
 from src.ui.aspect_ratio_view import AspectRatioView
 
 logger = log.setup_logger(__name__)
