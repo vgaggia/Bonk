@@ -23,22 +23,36 @@ def ensure_opus() -> bool:
     try:
         if discord.opus.is_loaded():
             return True
-        # Try explicit path from env var first
+
+        # Clear problematic OPUS_DLL_PATH if it exists
         import os
+        if "OPUS_DLL_PATH" in os.environ:
+            problematic_path = os.environ["OPUS_DLL_PATH"]
+            if not os.path.exists(problematic_path):
+                logger.info(f"Clearing invalid OPUS_DLL_PATH: {problematic_path}")
+                del os.environ["OPUS_DLL_PATH"]
+
+        # Try explicit path from env var first (after cleanup)
         path = os.getenv("OPUS_DLL_PATH")
         if path:
             try:
                 discord.opus.load_opus(path)
             except OSError as e:
                 logger.warning(f"Failed to load opus from OPUS_DLL_PATH={path}: {e}")
+
         if discord.opus.is_loaded():
             return True
-        for name in ("opus", "libopus-0", "libopus"):
+
+        # Try common Opus library names
+        for name in ("opus", "libopus-0", "libopus", "libopus-0.dll"):
             try:
                 discord.opus.load_opus(name)
-                break
+                if discord.opus.is_loaded():
+                    logger.info(f"Successfully loaded Opus as '{name}'")
+                    break
             except OSError:
                 continue
+
         return discord.opus.is_loaded()
     except Exception as e:
         logger.warning(f"Failed to load opus: {e}")

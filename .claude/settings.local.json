@@ -3,7 +3,19 @@
     "allow": [
       "WebFetch(domain:replicate.com)",
       "WebSearch",
-      "WebFetch(domain:pypi.org)"
+      "WebFetch(domain:pypi.org)",
+      "Bash(findstr:*)",
+      "Bash(curl:*)",
+      "Bash(dir:*)",
+      "Bash(python:*)",
+      "Bash(del libopus-0.x64.dll)",
+      "Bash(rm:*)",
+      "Bash(pip install:*)",
+      "Bash(set OPUS_DLL_PATH=\"\")",
+      "Bash(ffmpeg:*)",
+      "Bash(winget install:*)",
+      "Bash(where:*)",
+      "Read(//c/Program Files/ffmpeg/bin//**)"
     ],
     "deny": [],
     "ask": []

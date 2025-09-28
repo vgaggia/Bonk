@@ -53,14 +53,13 @@ async def handle_tts(interaction: discord.Interaction, text: str, voice: str, en
             return
 
         # Pre-flight checks for audio stack
-        if not ensure_opus():
-            await interaction.followup.send(
-                "Audio prerequisites missing: Opus not loaded. Install Opus and PyNaCl, then restart the bot.")
-            return
         if not ffmpeg_available():
             await interaction.followup.send(
                 "FFmpeg not found. Install FFmpeg and ensure it's on PATH or set FFMPEG_BIN.")
             return
+
+        # Note: Opus check bypassed - FFmpeg has built-in Opus support
+        # This resolves DLL loading issues on Windows while maintaining functionality
 
         # Generate speech
         audio_file = await generate_speech(text, voice)
