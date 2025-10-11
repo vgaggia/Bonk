@@ -9,6 +9,7 @@ from openai import OpenAI
 
 from src import log
 from src.commands import chat, clear, draw, help, imagine, model_3d, music, reset, tts, video
+from src.tts.playai import preload_voices
 from src.error_handler import handle_error
 from src.health_check import health_check
 from src.queue_manager import enqueue
@@ -43,6 +44,8 @@ async def on_ready():
     try:
         # Run health checks first
         await health_check()
+        # Preload PlayAI voices to avoid extra API calls during interactions
+        await preload_voices()
         
         # Sync commands
         await tree.sync()
@@ -177,20 +180,20 @@ async def video_command(interaction: discord.Interaction, prompt: str):
 
 @tree.command(name="tts", description="Generate text-to-speech audio")
 @app_commands.describe(
-    text="The text to convert to speech",
-    voice="The voice to use for text-to-speech",
-    enhance="Enhance the text prompt using AI (optional)"
+    text="The text to convert to speech"
 )
-@app_commands.choices(voice=[
-    app_commands.Choice(name=voice, value=voice) for voice in tts.VOICES
-])
-@app_commands.choices(enhance=[
-    app_commands.Choice(name="Yes", value="yes"),
-    app_commands.Choice(name="No", value="no")
-])
 @enqueue
-async def tts_command(interaction: discord.Interaction, text: str, voice: app_commands.Choice[str], enhance: app_commands.Choice[str] = None):
-    await tts.handle_tts(interaction, text, voice.value, enhance)
+async def tts_command(
+    interaction: discord.Interaction,
+    text: str,
+):
+    # Route to the provider/voice UI to pick OpenAI or PlayAI voices
+    await tts.tts_command(interaction, text)
+
+@tree.command(name="disconnect", description="Disconnect the bot from voice channel")
+@enqueue
+async def disconnect_command(interaction: discord.Interaction):
+    await tts.disconnect_voice(interaction)
 
 def run_discord_bot():
     """Start the Discord bot"""
