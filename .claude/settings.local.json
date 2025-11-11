@@ -15,7 +15,10 @@
       "Bash(ffmpeg:*)",
       "Bash(winget install:*)",
       "Bash(where:*)",
-      "Read(//c/Program Files/ffmpeg/bin//**)"
+      "Read(//c/Program Files/ffmpeg/bin//**)",
+      "WebFetch(domain:stackoverflow.com)",
+      "Bash(ruff check:*)",
+      "Bash(ruff format:*)"
     ],
     "deny": [],
     "ask": []
