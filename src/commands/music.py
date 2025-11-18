@@ -440,7 +440,11 @@ async def play(interaction: discord.Interaction, search: str):
 
 
 async def stop(interaction: discord.Interaction):
-    if music_player.voice_client:
+    """Stop all audio and disconnect from voice, even if only TTS is playing."""
+    # Prefer the music player's voice client if present
+    voice_client = music_player.voice_client or (interaction.guild and interaction.guild.voice_client)
+
+    if voice_client:
         music_player.is_playing = False
         music_player.cancel_idle_timeout()
         # Stop all tracks on the guild audio bus as well
@@ -449,12 +453,12 @@ async def stop(interaction: discord.Interaction):
             bus.stop_all()
         except Exception:
             # Fallback to stopping the voice client directly
-            music_player.voice_client.stop()
-        await music_player.voice_client.disconnect()
+            voice_client.stop()
+        await voice_client.disconnect()
         music_player.queue.clear()
         music_player.current_song = None
         music_player.voice_client = None
-        await interaction.followup.send("Stopped playback and cleared the queue.")
+        await interaction.followup.send("Stopped playback and disconnected from voice.")
     else:
         await interaction.followup.send("I'm not currently in a voice channel.")
 
@@ -489,5 +493,9 @@ async def next(interaction: discord.Interaction):
         else:
             music_player.voice_client.stop()
         await interaction.followup.send("Skipping to the next song.")
+        # Manually advance the queue, since stopping the track early
+        # suppresses the normal on_done callback that would call
+        # song_finished() when playback ends.
+        await music_player.song_finished(interaction)
     else:
         await interaction.followup.send("No song is currently playing.")

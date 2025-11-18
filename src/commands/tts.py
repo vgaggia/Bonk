@@ -19,22 +19,18 @@ VOICES = ["alloy", "echo", "fable", "onyx", "nova", "shimmer"]
 
 async def generate_speech(text: str, voice: str) -> Path:
     import time
+
     # Use unique filename to prevent overwriting queued TTS
     timestamp = int(time.time() * 1000)
     speech_file_path = Path(f"temp_tts_{timestamp}.mp3")
 
     response = client.audio.speech.create(model="tts-1", voice=voice, input=text)
-
-    # Use stream_to_file from OpenAI SDK
     response.stream_to_file(speech_file_path)
 
-    logger.info(f"Generated TTS file: {speech_file_path}, size: {speech_file_path.stat().st_size}")
+    logger.info(
+        f"Generated TTS file: {speech_file_path}, size: {speech_file_path.stat().st_size}"
+    )
     return speech_file_path
-
-
-async def play_audio(voice_client, audio_path):
-    """Compatibility shim – not used with the new mixer-based playback."""
-    logger.warning("play_audio() is deprecated and no longer used with the mixer.")
 
 
 async def handle_tts(
@@ -42,27 +38,24 @@ async def handle_tts(
     text: str,
     voice: str,
     enhance: discord.app_commands.Choice[str] = None,
-):
+) -> None:
     username = str(interaction.user)
 
     try:
-        # Check if prompt enhancement is requested
+        # Optional prompt enhancement
         if enhance and enhance.value == "yes":
             logger.info(f"Enhancing TTS prompt: {text}")
-
-            # Use the existing enhance_prompt function to improve the text, passing 'tts' context
-            enhanced_text = await responses.enhance_prompt(text, context='tts')
-
+            enhanced_text = await responses.enhance_prompt(text, context="tts")
             text = enhanced_text
             logger.info(f"Enhanced TTS prompt: {text}")
 
         if not interaction.user.voice:
             await interaction.followup.send(
-                "You need to be in a voice channel to use this command.", ephemeral=True
+                "You need to be in a voice channel to use this command.",
+                ephemeral=True,
             )
             return
 
-        # Pre-flight checks for audio stack
         if not ffmpeg_available():
             await interaction.followup.send(
                 "FFmpeg not found. Install FFmpeg and ensure it's on PATH or set FFMPEG_BIN.",
@@ -70,13 +63,9 @@ async def handle_tts(
             )
             return
 
-        # Note: Opus check bypassed - FFmpeg has built-in Opus support
-        # This resolves DLL loading issues on Windows while maintaining functionality
-
-        # Generate speech with OpenAI (this takes time)
+        # Generate speech audio
         try:
             audio_file = await generate_speech(text, voice)
-            # Ensure file is fully written and closed
             await asyncio.sleep(0.1)
         except Exception as e:
             logger.error(f"Failed to generate TTS: {e}")
@@ -85,7 +74,7 @@ async def handle_tts(
             )
             return
 
-        # Ensure we are connected to the user's voice channel.
+        # Connect or reuse voice client
         voice_client = await voice_session_manager.get_or_connect(interaction)
         if not voice_client:
             await interaction.followup.send(
@@ -99,7 +88,9 @@ async def handle_tts(
         bus = get_guild_bus(interaction.guild.id)
         bus.attach_voice_client(voice_client)
 
-        audio_source = discord.FFmpegPCMAudio(str(audio_file), executable=ffmpeg_executable())
+        audio_source = discord.FFmpegPCMAudio(
+            str(audio_file), executable=ffmpeg_executable()
+        )
 
         # Duck music while this TTS clip is playing
         try:
@@ -107,17 +98,16 @@ async def handle_tts(
 
             music_player.duck_for_tts()
         except Exception:
-            # If music subsystem is unavailable, just skip ducking
             pass
 
-        def on_done(error: Exception | None = None):
+        def on_done(error: Exception | None = None) -> None:
             if error:
                 logger.error(f"Error during TTS playback: {error}")
             try:
-                os.remove(audio_file)
-            except OSError as e:
+                audio_file.unlink(missing_ok=True)
+            except Exception as e:
                 logger.error(f"Error deleting TTS file {audio_file}: {e}")
-            # Restore music volume when this TTS clip finishes
+
             try:
                 from src.commands.music import music_player
 
@@ -127,14 +117,18 @@ async def handle_tts(
 
         bus.add_track(audio_source, volume=1.0, on_done=on_done)
 
-        # Ephemeral confirmation for the user
+        # Ephemeral confirmation for the user (who + voice)
         try:
             await interaction.followup.send(
-                content=f"TTS audio queued using the {voice} voice.",
+                content=(
+                    f"TTS audio queued for {interaction.user.display_name} "
+                    f"using the {voice} voice."
+                ),
                 ephemeral=True,
             )
         except Exception:
             pass
+
     except Exception as e:
         logger.error(f"Error in TTS command for {username}: {str(e)}")
         try:
@@ -143,20 +137,20 @@ async def handle_tts(
             )
         except Exception:
             pass
-        if interaction.guild.voice_client:
+        if interaction.guild and interaction.guild.voice_client:
             voice_session_manager.cancel_session(interaction.guild.id)
 
 
-async def handle_tts_for_chat(interaction: discord.Interaction, text: str):
+async def handle_tts_for_chat(interaction: discord.Interaction, text: str) -> None:
     if not interaction.user.voice:
-        await interaction.followup.send("You need to be in a voice channel to use TTS.")
+        await interaction.followup.send(
+            "You need to be in a voice channel to use TTS."
+        )
         return
 
     try:
-        # Generate speech using a default OpenAI voice
         audio_file = await generate_speech(text, "alloy")
 
-        # Join voice channel using session manager and play via the mixer
         voice_client = await voice_session_manager.get_or_connect(interaction)
         if not voice_client:
             await interaction.followup.send(
@@ -167,9 +161,10 @@ async def handle_tts_for_chat(interaction: discord.Interaction, text: str):
         bus = get_guild_bus(interaction.guild.id)
         bus.attach_voice_client(voice_client)
 
-        audio_source = discord.FFmpegPCMAudio(str(audio_file), executable=ffmpeg_executable())
+        audio_source = discord.FFmpegPCMAudio(
+            str(audio_file), executable=ffmpeg_executable()
+        )
 
-        # Duck music while this chat TTS clip is playing
         try:
             from src.commands.music import music_player
 
@@ -177,14 +172,13 @@ async def handle_tts_for_chat(interaction: discord.Interaction, text: str):
         except Exception:
             pass
 
-        def on_done(error: Exception | None = None):
+        def on_done(error: Exception | None = None) -> None:
             if error:
                 logger.error(f"Error during chat TTS playback: {error}")
             try:
-                os.remove(audio_file)
-            except OSError as e:
+                audio_file.unlink(missing_ok=True)
+            except Exception as e:
                 logger.error(f"Error deleting chat TTS file {audio_file}: {e}")
-            # Restore music volume when this TTS clip finishes
             try:
                 from src.commands.music import music_player
 
@@ -194,29 +188,29 @@ async def handle_tts_for_chat(interaction: discord.Interaction, text: str):
 
         bus.add_track(audio_source, volume=1.0, on_done=on_done)
 
-        await interaction.followup.send("TTS audio played successfully.")
+        await interaction.followup.send(
+            f"TTS audio played for {interaction.user.display_name}."
+        )
     except Exception as e:
         logger.error(f"Error in TTS for chat: {str(e)}")
-        await interaction.followup.send(f"An error occurred while playing TTS: {str(e)}")
-        if interaction.guild.voice_client:
+        await interaction.followup.send(
+            f"An error occurred while playing TTS: {str(e)}"
+        )
+        if interaction.guild and interaction.guild.voice_client:
             voice_session_manager.cancel_session(interaction.guild.id)
 
 
 class VoiceSelect(discord.ui.Select):
-    def __init__(self, text: str, enhance: bool = False):
+    def __init__(self, text: str, enhance: bool = False) -> None:
         options = [discord.SelectOption(label=voice, value=voice) for voice in VOICES]
         super().__init__(placeholder="Select a voice", options=options)
         self.text = text
         self.enhance = enhance
 
-    async def callback(self, interaction: discord.Interaction):
-        # Update the ephemeral selector message so only the invoking
-        # user sees the generation status.
-        await interaction.response.edit_message(
-            content=f"Generating TTS using {self.values[0]} voice...", view=None
-        )
+    async def callback(self, interaction: discord.Interaction) -> None:
+        # Keep the menu around so the user can repeat TTS.
+        await interaction.response.defer(thinking=True)
 
-        # Create enhance choice object if needed
         enhance_choice = None
         if self.enhance:
             enhance_choice = discord.app_commands.Choice(name="yes", value="yes")
@@ -225,31 +219,36 @@ class VoiceSelect(discord.ui.Select):
 
 
 class TTSView(discord.ui.View):
-    def __init__(self, text: str, enhance: bool = False):
+    def __init__(self, text: str, enhance: bool = False) -> None:
         super().__init__()
         self.add_item(VoiceSelect(text, enhance))
 
 
-async def tts_command(interaction: discord.Interaction, text: str, enhance: bool = False):
+async def tts_command(
+    interaction: discord.Interaction, text: str, enhance: bool = False
+) -> None:
     view = TTSView(text, enhance)
-    # The enqueue decorator has already deferred the interaction; keep the
-    # public message minimal and show the selector only to the invoking user.
+    # Public message (blue command text) stays simple.
     await interaction.edit_original_response(
         content=f"{interaction.user.display_name} used /tts",
         view=None,
     )
+    # Voice selection is ephemeral and only visible to the invoker.
     await interaction.followup.send(
         content="Select a voice for TTS:", view=view, ephemeral=True
     )
 
 
-async def disconnect_voice(interaction: discord.Interaction):
+async def disconnect_voice(interaction: discord.Interaction) -> None:
     """Manually disconnect the bot from voice channel."""
-    if interaction.guild.voice_client:
+    if interaction.guild and interaction.guild.voice_client:
         voice_session_manager.cancel_session(interaction.guild.id)
         await interaction.guild.voice_client.disconnect()
-        await interaction.response.send_message("Disconnected from voice channel.", ephemeral=True)
+        await interaction.response.send_message(
+            "Disconnected from voice channel.", ephemeral=True
+        )
     else:
         await interaction.response.send_message(
             "Not connected to any voice channel.", ephemeral=True
         )
+
