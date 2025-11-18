@@ -44,9 +44,26 @@ class VoiceSessionManager:
             return None
 
     async def _schedule_disconnect(self, voice_client: discord.VoiceClient, guild_id: int):
-        """Schedule automatic disconnection after timeout."""
+        """Schedule automatic disconnection after timeout.
+
+        The session is only disconnected if the client is still connected
+        and not actively playing audio. This prevents TTS timeouts from
+        interrupting long-running music playback.
+        """
         try:
             await asyncio.sleep(self.timeout_seconds)
+
+            # If something is still playing, reschedule the timeout instead of
+            # disconnecting mid-playback.
+            if voice_client.is_connected() and voice_client.is_playing():
+                logger.debug(
+                    "Voice client still playing in guild %s, rescheduling disconnect timer",
+                    guild_id,
+                )
+                self.active_sessions[guild_id] = asyncio.create_task(
+                    self._schedule_disconnect(voice_client, guild_id)
+                )
+                return
 
             if voice_client.is_connected():
                 await voice_client.disconnect()

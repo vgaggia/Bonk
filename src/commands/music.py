@@ -7,6 +7,7 @@ import yt_dlp
 
 from src import log
 from src.voice import connect_to_user_channel, ensure_opus, ffmpeg_available, ffmpeg_executable
+from src.audio_bus import get_guild_bus, MixerTrack
 
 logger = log.setup_logger(__name__)
 
@@ -42,13 +43,36 @@ class MusicPlayer:
         self.song_duration = None
         self.pause_time = None
         self.accumulated_pause_duration = 0
-        # Track if download is ready for TTS mixing
-        self.download_ready = asyncio.Event()
-        # Flag to prevent file deletion during TTS mixing
-        self.is_mixing_tts = False
         # Idle timeout management (disconnect after 2 minutes of inactivity)
         self.idle_timeout_task = None
         self.idle_timeout_seconds = 120
+        # Mixer integration: handle for the currently playing music/queue item
+        self.current_track: MixerTrack | None = None
+        # Base music volume when not ducked (used for mixer volume)
+        self.music_base_volume = 0.4
+        # Number of active TTS overlays currently ducking the music
+        self.music_duck_count = 0
+
+    def duck_for_tts(self) -> None:
+        """Temporarily lower music volume while TTS is playing."""
+        if not self.current_track:
+            return
+        self.music_duck_count += 1
+        try:
+            self.current_track.volume = self.music_base_volume * 0.5
+        except Exception:
+            logger.exception("Error ducking music for TTS")
+
+    def unduck_for_tts(self) -> None:
+        """Restore music volume after TTS has finished."""
+        if not self.current_track or self.music_duck_count <= 0:
+            return
+        self.music_duck_count -= 1
+        if self.music_duck_count == 0:
+            try:
+                self.current_track.volume = self.music_base_volume
+            except Exception:
+                logger.exception("Error restoring music volume after TTS")
 
     def get_current_position(self) -> float:
         """Get current playback position in seconds."""
@@ -204,11 +228,19 @@ class MusicPlayer:
             url, executable=ffmpeg_executable(), **self.livestream_ffmpeg_options
         )
         self.play_start_time = time.time()
-        self.voice_client.play(
-            audio_source,
-            after=lambda e: asyncio.run_coroutine_threadsafe(
+        bus = get_guild_bus(interaction.guild.id)
+        bus.attach_voice_client(self.voice_client)
+
+        def on_done(error: Exception | None = None):
+            if error:
+                logger.error(f"Error during livestream playback: {error}")
+            asyncio.run_coroutine_threadsafe(
                 self.song_finished(interaction), interaction.client.loop
-            ),
+            )
+
+        # Slightly lower volume so TTS over music remains clear.
+        self.current_track = bus.add_track(
+            audio_source, volume=self.music_base_volume, on_done=on_done
         )
         await interaction.followup.send(f"Now streaming: {self.current_song['title']}")
         logger.info(f"Started streaming: {self.current_song['title']}")
@@ -230,11 +262,19 @@ class MusicPlayer:
             stream_url, executable=ffmpeg_executable(), **self.ffmpeg_options
         )
         self.play_start_time = time.time()
-        self.voice_client.play(
-            audio_source,
-            after=lambda e: asyncio.run_coroutine_threadsafe(
+        bus = get_guild_bus(interaction.guild.id)
+        bus.attach_voice_client(self.voice_client)
+
+        def on_done(error: Exception | None = None):
+            if error:
+                logger.error(f"Error during audio playback: {error}")
+            asyncio.run_coroutine_threadsafe(
                 self.song_finished(interaction), interaction.client.loop
-            ),
+            )
+
+        # Slightly lower volume so TTS over music remains clear.
+        self.current_track = bus.add_track(
+            audio_source, volume=self.music_base_volume, on_done=on_done
         )
         await interaction.followup.send(f"Now playing: {self.current_song['title']}")
         logger.info(f"Started playing: {self.current_song['title']}")
@@ -250,16 +290,10 @@ class MusicPlayer:
             await self.song_finished(interaction)
             return
 
-        # Check if voice client is already playing something
-        if self.voice_client.is_playing():
-            logger.warning("Voice client is still playing, waiting for it to finish...")
-            await asyncio.sleep(0.5)  # Increased wait time
-            if self.voice_client.is_playing():
-                logger.error("Voice client still playing after wait, stopping it")
-                self.voice_client.stop()
-                await asyncio.sleep(0.3)  # More time for cleanup
-
-        logger.info(f"Playing TTS file: {file_path}, exists: {os.path.exists(file_path)}, size: {os.path.getsize(file_path) if os.path.exists(file_path) else 0}")
+        logger.info(
+            f"Playing TTS file from queue: {file_path}, exists: {os.path.exists(file_path)}, "
+            f"size: {os.path.getsize(file_path) if os.path.exists(file_path) else 0}"
+        )
 
         # Use simpler FFmpeg options for local files
         simple_options = {
@@ -271,14 +305,17 @@ class MusicPlayer:
         )
         self.play_start_time = time.time()
 
-        def after_playback(error):
+        bus = get_guild_bus(interaction.guild.id)
+        bus.attach_voice_client(self.voice_client)
+
+        def on_done(error: Exception | None = None):
             if error:
-                logger.error(f"Error during TTS playback: {error}")
+                logger.error(f"Error during queued TTS playback: {error}")
             asyncio.run_coroutine_threadsafe(
                 self.song_finished(interaction), interaction.client.loop
             )
 
-        self.voice_client.play(audio_source, after=after_playback)
+        self.current_track = bus.add_track(audio_source, volume=1.0, on_done=on_done)
         # Only send message if we can (don't fail if interaction is old)
         try:
             await interaction.followup.send(f"Now playing: {self.current_song['title']}")
@@ -288,6 +325,9 @@ class MusicPlayer:
 
     async def song_finished(self, interaction):
         self.is_playing = False
+        # Clear the handle for the track that just finished and reset ducking
+        self.current_track = None
+        self.music_duck_count = 0
 
         # Save reference to the song that just finished
         finished_song = self.current_song
@@ -304,228 +344,6 @@ class MusicPlayer:
                     logger.info(f"Cleaned up TTS file: {file_path}")
                 except Exception as e:
                     logger.error(f"Error cleaning up TTS file: {e}")
-
-    def reserve_tts_slot(self, title: str = "TTS Audio (processing...)"):
-        """Reserve a slot in the queue for TTS that's being generated."""
-        placeholder = {
-            'file_path': None,  # Will be filled in later
-            'title': title,
-            'is_local_file': True,
-            'is_live': False,
-            'duration': 0,
-            'is_placeholder': True,
-        }
-        # Insert at the front of the queue (plays next)
-        self.queue.insert(0, placeholder)
-        logger.info(f"Reserved TTS slot in queue at position 0")
-        return placeholder
-
-    def update_tts_slot(self, placeholder: dict, file_path: str, title: str):
-        """Update a reserved TTS slot with the actual file."""
-        placeholder['file_path'] = file_path
-        placeholder['title'] = title
-        placeholder['is_placeholder'] = False
-        logger.info(f"Updated TTS slot with file: {file_path}")
-
-    def remove_tts_slot(self, placeholder: dict):
-        """Remove a reserved TTS slot if generation failed."""
-        if placeholder in self.queue:
-            self.queue.remove(placeholder)
-            logger.info("Removed failed TTS slot from queue")
-
-    async def insert_tts_mixed(self, tts_file: str, interaction: discord.Interaction) -> bool:
-        """
-        Insert TTS audio by mixing it with current music playback.
-        Seamlessly swaps to mixed segment and back to original music.
-
-        Args:
-            tts_file: Path to TTS audio file
-            interaction: Discord interaction for followup messages
-
-        Returns:
-            True if successful, False otherwise
-        """
-        from src.audio_mixer import create_mixed_tts_segment, get_audio_duration
-
-        if not self.is_playing or not self.current_song:
-            logger.warning("Cannot insert TTS: no music playing")
-            return False
-
-        # Don't mix into livestreams
-        if self.current_song.get('is_live', False):
-            logger.info("Current song is livestream, queueing TTS instead")
-            return False
-
-        try:
-            # Set flag to prevent file deletion during mixing
-            self.is_mixing_tts = True
-
-            # Wait for download to complete (with timeout)
-            try:
-                await asyncio.wait_for(self.download_ready.wait(), timeout=30.0)
-            except asyncio.TimeoutError:
-                logger.warning("Download not ready after 30s, falling back to queue")
-                self.is_mixing_tts = False
-                return False
-
-            # Verify file exists
-            if not os.path.exists('temp_audio.mp3'):
-                logger.warning("temp_audio.mp3 not found, falling back to queue")
-                self.is_mixing_tts = False
-                return False
-
-            # Create a copy of temp_audio.mp3 to avoid file locking issues
-            import shutil
-
-            music_copy = 'temp_audio_copy.mp3'
-            try:
-                shutil.copy2('temp_audio.mp3', music_copy)
-                logger.info("Created copy of temp_audio.mp3 for mixing")
-            except Exception as e:
-                logger.error(f"Failed to copy audio file: {e}")
-                self.is_mixing_tts = False
-                return False
-
-            # Get current state
-            current_position = self.get_current_position()
-            remaining_time = self.get_remaining_time()
-
-            # Segment length is minimum of 30s or remaining time
-            segment_duration = min(30.0, remaining_time)
-
-            logger.info(
-                f"Inserting TTS at position {current_position:.1f}s, segment: {segment_duration:.1f}s"
-            )
-
-            # Create mixed segment using the copy
-            mixed_file = create_mixed_tts_segment(
-                music_file=music_copy,
-                tts_file=tts_file,
-                current_position=current_position,
-                segment_duration=segment_duration,
-                output_file='temp_mixed_tts.mp3',
-            )
-
-            if not mixed_file:
-                logger.error("Failed to create mixed segment")
-                # Clean up copy
-                if os.path.exists(music_copy):
-                    os.remove(music_copy)
-                return False
-
-            # Clean up the copy now that mixing is done
-            if os.path.exists(music_copy):
-                os.remove(music_copy)
-            logger.info("Cleaned up music copy")
-
-            # Calculate when to resume original music
-            logger.info("Getting mixed file duration...")
-            mixed_duration = get_audio_duration(mixed_file)
-            logger.info(f"Mixed file duration: {mixed_duration}")
-
-            if not mixed_duration:
-                logger.error("Could not determine mixed file duration")
-                if os.path.exists(mixed_file):
-                    os.remove(mixed_file)
-                return False
-
-            # Stop current playback
-            logger.info("Stopping current playback...")
-            if self.voice_client and self.voice_client.is_playing():
-                self.voice_client.stop()
-                await asyncio.sleep(0.1)  # Brief pause for clean stop
-            logger.info("Current playback stopped")
-
-            # Play mixed segment
-            logger.info("Creating audio source for mixed segment...")
-            audio_source = discord.FFmpegPCMAudio(
-                mixed_file, executable=ffmpeg_executable(), **self.ffmpeg_options
-            )
-            logger.info("Audio source created")
-
-            resume_position = current_position + segment_duration
-            resume_interaction = interaction
-
-            def after_mixed(error):
-                """Callback after mixed segment finishes."""
-                if error:
-                    logger.error(f"Error during mixed playback: {error}")
-
-                # Clean up mixed file
-                if os.path.exists('temp_mixed_tts.mp3'):
-                    try:
-                        os.remove('temp_mixed_tts.mp3')
-                    except Exception as e:
-                        logger.error(f"Error removing mixed file: {e}")
-
-                # Clear mixing flag so file can be deleted later if needed
-                self.is_mixing_tts = False
-
-                # Resume original music from calculated position
-                asyncio.run_coroutine_threadsafe(
-                    self._resume_music_at_position(resume_position, resume_interaction),
-                    resume_interaction.client.loop,
-                )
-
-            logger.info("Starting playback of mixed segment...")
-            self.voice_client.play(audio_source, after=after_mixed)
-            logger.info(f"Playing mixed segment, will resume at {resume_position:.1f}s")
-
-            return True
-
-        except Exception as e:
-            logger.error(f"Error inserting TTS: {e}", exc_info=True)
-            # Clear mixing flag on error
-            self.is_mixing_tts = False
-            # Clean up on error
-            if os.path.exists('temp_mixed_tts.mp3'):
-                try:
-                    os.remove('temp_mixed_tts.mp3')
-                except Exception:
-                    pass
-            if os.path.exists(music_copy):
-                try:
-                    os.remove(music_copy)
-                except Exception:
-                    pass
-            return False
-
-    async def _resume_music_at_position(self, position: float, interaction: discord.Interaction):
-        """Resume original music from a specific position."""
-        try:
-            if not self.current_song or not os.path.exists('temp_audio.mp3'):
-                logger.warning("Cannot resume: music file not found")
-                await self.song_finished(interaction)
-                return
-
-            # Create audio source starting from position
-            # Combine seek with existing before_options
-            resume_options = self.ffmpeg_options.copy()
-            resume_options['before_options'] = f"{resume_options['before_options']} -ss {position}"
-
-            audio_source = discord.FFmpegPCMAudio(
-                'temp_audio.mp3',
-                executable=ffmpeg_executable(),
-                **resume_options,
-            )
-
-            # Update tracking to reflect new position
-            self.play_start_time = time.time() - position
-
-            # Play from position
-            self.voice_client.play(
-                audio_source,
-                after=lambda e: asyncio.run_coroutine_threadsafe(
-                    self.song_finished(interaction), interaction.client.loop
-                ),
-            )
-
-            logger.info(f"Resumed music at position {position:.1f}s")
-
-        except Exception as e:
-            logger.error(f"Error resuming music: {e}")
-            await self.song_finished(interaction)
-
 
 music_player = MusicPlayer()
 
@@ -625,7 +443,13 @@ async def stop(interaction: discord.Interaction):
     if music_player.voice_client:
         music_player.is_playing = False
         music_player.cancel_idle_timeout()
-        music_player.voice_client.stop()
+        # Stop all tracks on the guild audio bus as well
+        try:
+            bus = get_guild_bus(interaction.guild.id)
+            bus.stop_all()
+        except Exception:
+            # Fallback to stopping the voice client directly
+            music_player.voice_client.stop()
         await music_player.voice_client.disconnect()
         music_player.queue.clear()
         music_player.current_song = None
@@ -653,7 +477,17 @@ async def resume(interaction: discord.Interaction):
 
 async def next(interaction: discord.Interaction):
     if music_player.voice_client and music_player.is_playing:
-        music_player.voice_client.stop()
+        # Stop only the current music track; other mixed audio (e.g. TTS)
+        # is allowed to continue playing.
+        if music_player.current_track is not None:
+            try:
+                bus = get_guild_bus(interaction.guild.id)
+                bus.stop_track(music_player.current_track)
+            except Exception:
+                # Fallback: stop the whole voice client if bus is unavailable
+                music_player.voice_client.stop()
+        else:
+            music_player.voice_client.stop()
         await interaction.followup.send("Skipping to the next song.")
     else:
         await interaction.followup.send("No song is currently playing.")
