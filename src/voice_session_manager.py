@@ -1,6 +1,7 @@
 import asyncio
 import logging
 from typing import Dict, Optional
+
 import discord
 
 logger = logging.getLogger(__name__)
@@ -12,8 +13,11 @@ class VoiceSessionManager:
     def __init__(self, timeout_minutes: int = 3):
         self.timeout_seconds = timeout_minutes * 60
         self.active_sessions: Dict[int, asyncio.Task] = {}  # guild_id -> disconnect task
+        self.stay_guilds: set[int] = set()  # guilds where /stay on prevents auto-disconnect
 
-    async def get_or_connect(self, interaction: discord.Interaction) -> Optional[discord.VoiceClient]:
+    async def get_or_connect(
+        self, interaction: discord.Interaction
+    ) -> Optional[discord.VoiceClient]:
         """Get existing voice client or connect to user's channel."""
         from src.voice import connect_to_user_channel
 
@@ -35,7 +39,9 @@ class VoiceSessionManager:
             self.active_sessions[guild_id] = asyncio.create_task(
                 self._schedule_disconnect(voice_client, guild_id)
             )
-            logger.info(f"Voice session active for guild {guild_id}, will disconnect in {self.timeout_seconds}s")
+            logger.info(
+                f"Voice session active for guild {guild_id}, will disconnect in {self.timeout_seconds}s"
+            )
 
             return voice_client
 
@@ -53,6 +59,33 @@ class VoiceSessionManager:
         try:
             await asyncio.sleep(self.timeout_seconds)
 
+            # If /stay is on for this guild, just reschedule indefinitely
+            if guild_id in self.stay_guilds:
+                logger.debug(
+                    "Stay mode active in guild %s, rescheduling disconnect timer", guild_id
+                )
+                self.active_sessions[guild_id] = asyncio.create_task(
+                    self._schedule_disconnect(voice_client, guild_id)
+                )
+                return
+
+            # Check if listening is active - if so, reschedule instead of disconnecting
+            try:
+                from src.voice_listen import get_listen_session
+
+                listen_session = get_listen_session(guild_id)
+                if listen_session and listen_session.active:
+                    logger.debug(
+                        "Listening active in guild %s, rescheduling disconnect timer (infinite while listening)",
+                        guild_id,
+                    )
+                    self.active_sessions[guild_id] = asyncio.create_task(
+                        self._schedule_disconnect(voice_client, guild_id)
+                    )
+                    return
+            except Exception:
+                logger.debug("Could not check listen session status", exc_info=True)
+
             # If something is still playing, reschedule the timeout instead of
             # disconnecting mid-playback.
             if voice_client.is_connected() and voice_client.is_playing():
@@ -67,7 +100,9 @@ class VoiceSessionManager:
 
             if voice_client.is_connected():
                 await voice_client.disconnect()
-                logger.info(f"Auto-disconnected from voice channel in guild {guild_id} after timeout")
+                logger.info(
+                    f"Auto-disconnected from voice channel in guild {guild_id} after timeout"
+                )
 
             # Clean up the session
             if guild_id in self.active_sessions:
@@ -82,7 +117,9 @@ class VoiceSessionManager:
             if guild_id in self.active_sessions:
                 del self.active_sessions[guild_id]
 
-    async def queue_audio(self, voice_client: discord.VoiceClient, audio_source, after_callback=None):
+    async def queue_audio(
+        self, voice_client: discord.VoiceClient, audio_source, after_callback=None
+    ):
         """Queue audio to play, waiting if something is already playing."""
         # If something is playing, wait for it to finish
         while voice_client.is_playing():

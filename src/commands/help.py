@@ -2,6 +2,7 @@ from src import log
 
 logger = log.setup_logger(__name__)
 
+
 async def handle_help(interaction):
     await interaction.response.defer()
     await interaction.followup.send(""":star:**BASIC COMMANDS** \n

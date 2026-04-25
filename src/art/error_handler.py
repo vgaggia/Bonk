@@ -1,15 +1,17 @@
-class ContentModerationError(Exception):
-    pass
+from src.error_handler import ContentModerationError  # noqa: F401 - re-export for convenience
 
 
 def handle_error(error):
     error_type = type(error).__name__
     error_message = str(error)
-    
+
     # Check if the error message contains specific content moderation indicators
-    if any(phrase in error_message.lower() for phrase in ['safety system', 'content policy', 'moderation', 'safety violations']):
+    if any(
+        phrase in error_message.lower()
+        for phrase in ['safety system', 'content policy', 'moderation', 'safety violations']
+    ):
         return "Content blocked: Your request was flagged by the safety system. Please try with different content."
-    
+
     if error_type == "APIConnectionError":
         return "There was an issue connecting to the AI service. Please check your internet connection and try again."
     elif error_type == "APIError":
@@ -32,6 +34,7 @@ def handle_error(error):
             return "Content blocked: Your request was rejected by the safety system"
         else:
             return f"An unexpected error occurred: {error_message}"
+
 
 def display_error(error):
     error_message = handle_error(error)

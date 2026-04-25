@@ -7,7 +7,7 @@ from discord import app_commands
 from dotenv import load_dotenv
 from openai import OpenAI
 
-from src import log
+from src import log, voice_listen
 from src.commands import chat, clear, draw, help, imagine, model_3d, music, reset, tts, video
 from src.error_handler import handle_error
 from src.health_check import health_check
@@ -98,7 +98,6 @@ async def on_tree_error(interaction: discord.Interaction, error: app_commands.Ap
         app_commands.Choice(name="Local Model", value="local-model"),
     ]
 )
-@enqueue
 async def chat_command(
     interaction: discord.Interaction,
     message: str,
@@ -126,7 +125,6 @@ async def chat_command(
         app_commands.Choice(name="No", value="no"),
     ]
 )
-@enqueue
 async def draw_command(
     interaction: discord.Interaction, prompt: str, enhance: app_commands.Choice[str] = None
 ):
@@ -134,7 +132,6 @@ async def draw_command(
 
 
 @tree.command(name="imagine", description="Animate user profile pictures or an attached image")
-@enqueue
 async def imagine_command(
     interaction: discord.Interaction,
     user: discord.Member = None,
@@ -144,7 +141,6 @@ async def imagine_command(
 
 
 @tree.command(name="3d", description="Generate a 3D model from an image")
-@enqueue
 async def model_3d_command(
     interaction: discord.Interaction,
     user: discord.Member = None,
@@ -204,7 +200,6 @@ async def next_command(interaction: discord.Interaction):
 
 @tree.command(name="video", description="Generate a video using AI")
 @app_commands.describe(prompt="The prompt for video generation")
-@enqueue
 async def video_command(interaction: discord.Interaction, prompt: str):
     await video.handle_video(interaction, prompt)
 
@@ -213,15 +208,49 @@ async def video_command(interaction: discord.Interaction, prompt: str):
 @app_commands.describe(
     text="The text to convert to speech", enhance="Enhance the text prompt using AI (optional)"
 )
-@enqueue
 async def tts_command(interaction: discord.Interaction, text: str, enhance: bool = False):
     await tts.tts_command(interaction, text, enhance)
 
 
 @tree.command(name="disconnect", description="Disconnect the bot from voice channel")
-@enqueue
 async def disconnect_command(interaction: discord.Interaction):
     await tts.disconnect_voice(interaction)
+
+
+@tree.command(name="listen", description="Toggle voice listening mode in your voice channel")
+@app_commands.describe(enable="Enable or disable voice listening")
+async def listen_command(interaction: discord.Interaction, enable: bool = True):
+    # Defer ephemerally so only the user sees responses (not using @enqueue)
+    await interaction.response.defer(ephemeral=True)
+    await voice_listen.handle_listen(interaction, enable)
+
+
+@tree.command(
+    name="stay", description="Keep the bot in the voice channel indefinitely (no auto-disconnect)"
+)
+@app_commands.describe(enable="Turn stay mode on or off")
+async def stay_command(interaction: discord.Interaction, enable: bool = True):
+    from src.voice_session_manager import voice_session_manager
+
+    if not interaction.guild:
+        await interaction.response.send_message(
+            "This command only works in a server.", ephemeral=True
+        )
+        return
+
+    guild_id = interaction.guild.id
+    if enable:
+        voice_session_manager.stay_guilds.add(guild_id)
+        await interaction.response.send_message(
+            "Stay mode **on** — I won't auto-disconnect from voice.", ephemeral=True
+        )
+        logger.info("Stay mode enabled for guild %s", guild_id)
+    else:
+        voice_session_manager.stay_guilds.discard(guild_id)
+        await interaction.response.send_message(
+            "Stay mode **off** — I'll auto-disconnect after inactivity.", ephemeral=True
+        )
+        logger.info("Stay mode disabled for guild %s", guild_id)
 
 
 def run_discord_bot():

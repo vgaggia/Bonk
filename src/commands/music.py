@@ -6,8 +6,9 @@ import discord
 import yt_dlp
 
 from src import log
+from src.audio_bus import MixerTrack, get_guild_bus
 from src.voice import connect_to_user_channel, ensure_opus, ffmpeg_available, ffmpeg_executable
-from src.audio_bus import get_guild_bus, MixerTrack
+from src.voice_session_manager import voice_session_manager
 
 logger = log.setup_logger(__name__)
 
@@ -104,10 +105,19 @@ class MusicPlayer:
             try:
                 await asyncio.sleep(self.idle_timeout_seconds)
                 if self.voice_client and self.voice_client.is_connected():
+                    guild_id = getattr(self.voice_client, 'guild', None)
+                    guild_id = guild_id.id if guild_id else None
+                    # Respect /stay mode
+                    if guild_id and guild_id in voice_session_manager.stay_guilds:
+                        logger.debug("Stay mode active, skipping idle disconnect")
+                        return
                     logger.info(f"Disconnecting due to {self.idle_timeout_seconds}s inactivity")
                     await self.voice_client.disconnect()
                     self.voice_client = None
                     self.is_playing = False
+                    # Clean up voice session manager too
+                    if guild_id:
+                        voice_session_manager.cancel_session(guild_id)
             except asyncio.CancelledError:
                 logger.debug("Idle timeout cancelled")
             except Exception as e:
@@ -136,7 +146,9 @@ class MusicPlayer:
             self.song_duration = None
             self.accumulated_pause_duration = 0
             # Start idle timeout - only runs when nothing is playing
-            await interaction.followup.send("Queue is empty. Will disconnect after 2 minutes of inactivity.")
+            await interaction.followup.send(
+                "Queue is empty. Will disconnect after 2 minutes of inactivity."
+            )
             await self.start_idle_timeout()
             return
 
@@ -286,7 +298,7 @@ class MusicPlayer:
         # Safety check - file path should never be None at this point
         if not file_path or not os.path.exists(file_path):
             logger.error(f"Local file not found: {file_path}")
-            await interaction.followup.send(f"Error: Audio file not found")
+            await interaction.followup.send("Error: Audio file not found")
             await self.song_finished(interaction)
             return
 
@@ -296,9 +308,7 @@ class MusicPlayer:
         )
 
         # Use simpler FFmpeg options for local files
-        simple_options = {
-            'options': '-vn'
-        }
+        simple_options = {'options': '-vn'}
 
         audio_source = discord.FFmpegPCMAudio(
             file_path, executable=ffmpeg_executable(), **simple_options
@@ -345,6 +355,7 @@ class MusicPlayer:
                 except Exception as e:
                     logger.error(f"Error cleaning up TTS file: {e}")
 
+
 music_player = MusicPlayer()
 
 
@@ -354,6 +365,14 @@ async def play(interaction: discord.Interaction, search: str):
         return
 
     channel = interaction.user.voice.channel
+
+    # Sync music_player.voice_client with the actual guild voice client
+    # to avoid desync when TTS or /listen connected the bot independently.
+    guild_vc = interaction.guild.voice_client if interaction.guild else None
+    if not music_player.voice_client or not music_player.voice_client.is_connected():
+        if guild_vc and guild_vc.is_connected():
+            music_player.voice_client = guild_vc
+
     if (
         not music_player.voice_client
         or not music_player.voice_client.is_connected()
@@ -442,7 +461,9 @@ async def play(interaction: discord.Interaction, search: str):
 async def stop(interaction: discord.Interaction):
     """Stop all audio and disconnect from voice, even if only TTS is playing."""
     # Prefer the music player's voice client if present
-    voice_client = music_player.voice_client or (interaction.guild and interaction.guild.voice_client)
+    voice_client = music_player.voice_client or (
+        interaction.guild and interaction.guild.voice_client
+    )
 
     if voice_client:
         music_player.is_playing = False
@@ -457,13 +478,22 @@ async def stop(interaction: discord.Interaction):
         await voice_client.disconnect()
         music_player.queue.clear()
         music_player.current_song = None
+        music_player.current_track = None
+        music_player.music_duck_count = 0
         music_player.voice_client = None
+        # Clean up voice session manager to prevent stale timers
+        if interaction.guild:
+            voice_session_manager.cancel_session(interaction.guild.id)
+            voice_session_manager.stay_guilds.discard(interaction.guild.id)
         await interaction.followup.send("Stopped playback and disconnected from voice.")
     else:
         await interaction.followup.send("I'm not currently in a voice channel.")
 
 
 async def pause(interaction: discord.Interaction):
+    # TODO: This pauses the entire voice client (including TTS) because the mixer
+    # architecture routes all audio through a single MixedAudioSource. Selectively
+    # pausing only music would require per-track pause support in the mixer.
     if music_player.voice_client and music_player.voice_client.is_playing():
         music_player.voice_client.pause()
         await interaction.followup.send("Playback paused.")

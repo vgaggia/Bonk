@@ -8,6 +8,7 @@ from src.ui.generate_video_view import GenerateVideoView
 
 logger = log.setup_logger(__name__)
 
+
 class AspectRatioView(discord.ui.View):
     def __init__(self, parent_view, model="sd", is_video=False, model_info=None):
         super().__init__(timeout=300.0)  # 5 minutes - longer timeout for model selection flow
@@ -76,9 +77,13 @@ class AspectRatioView(discord.ui.View):
         except Exception as e:
             logger.error(f"Error in handle_selection: {str(e)}")
             try:
-                await interaction.edit_original_response(content=f"> **Error: {str(e)}**", view=None)
+                await interaction.edit_original_response(
+                    content=f"> **Error: {str(e)}**", view=None
+                )
             except (discord.errors.NotFound, discord.errors.InteractionResponded):
-                logger.warning("Cannot edit interaction response - interaction expired or already responded")
+                logger.warning(
+                    "Cannot edit interaction response - interaction expired or already responded"
+                )
             self.parent_view.interaction_completed = True
             self.parent_view.stop()
 
@@ -86,12 +91,22 @@ class AspectRatioView(discord.ui.View):
         try:
             if self.model == "sd":
                 model_name = "Stable Diffusion 3"
-                await interaction.edit_original_response(content=f"Generating image with {model_name} (Aspect Ratio: {aspect_ratio})... This may take a minute or two.", view=None)
-                result = await image_generation.generate_image_sd(self.parent_view.prompt, aspect_ratio)
+                await interaction.edit_original_response(
+                    content=f"Generating image with {model_name} (Aspect Ratio: {aspect_ratio})... This may take a minute or two.",
+                    view=None,
+                )
+                result = await image_generation.generate_image_sd(
+                    self.parent_view.prompt, aspect_ratio
+                )
             elif self.model == "dalle":
                 model_name = "DALL-E 3"
-                await interaction.edit_original_response(content=f"Generating image with {model_name} (Aspect Ratio: {aspect_ratio})... This may take a minute or two.", view=None)
-                result = await image_generation.generate_image_dalle(self.parent_view.prompt, aspect_ratio)
+                await interaction.edit_original_response(
+                    content=f"Generating image with {model_name} (Aspect Ratio: {aspect_ratio})... This may take a minute or two.",
+                    view=None,
+                )
+                result = await image_generation.generate_image_dalle(
+                    self.parent_view.prompt, aspect_ratio
+                )
             elif self.model == "replicate":
                 if self.model_info:
                     model_name = f"Replicate ({self.model_info['name']})"
@@ -99,9 +114,14 @@ class AspectRatioView(discord.ui.View):
                 else:
                     model_name = "Replicate"
                     model_id = "black-forest-labs/flux-schnell"  # Default fallback
-                
-                await interaction.edit_original_response(content=f"Generating image with {model_name} (Aspect Ratio: {aspect_ratio})... This may take a minute or two.", view=None)
-                result = await image_generation.generate_image_replicate(self.parent_view.prompt, aspect_ratio, model_id)
+
+                await interaction.edit_original_response(
+                    content=f"Generating image with {model_name} (Aspect Ratio: {aspect_ratio})... This may take a minute or two.",
+                    view=None,
+                )
+                result = await image_generation.generate_image_replicate(
+                    self.parent_view.prompt, aspect_ratio, model_id
+                )
             elif self.model == "gpt-image-1":
                 model_name = "GPT Image 1"
                 # Don't edit the response here, let the parent view handle it
@@ -115,9 +135,13 @@ class AspectRatioView(discord.ui.View):
                 # This is an error message
                 logger.error(f"Error in {model_name}: {result}")
                 try:
-                    await interaction.edit_original_response(content=f"> **Error in {model_name}: {result}**", view=None)
+                    await interaction.edit_original_response(
+                        content=f"> **Error in {model_name}: {result}**", view=None
+                    )
                 except (discord.errors.NotFound, discord.errors.InteractionResponded):
-                    logger.warning("Cannot edit interaction response - interaction expired or already responded")
+                    logger.warning(
+                        "Cannot edit interaction response - interaction expired or already responded"
+                    )
                 self.parent_view.interaction_completed = True
                 self.parent_view.stop()
             else:
@@ -127,18 +151,24 @@ class AspectRatioView(discord.ui.View):
                 embed = discord.Embed(title=f"> **{self.parent_view.prompt}**")
                 embed.description = f"> **Model: {model_name}**\n> **Aspect Ratio: {aspect_ratio}**"
                 embed.set_image(url="attachment://image.png")
-                
+
                 view = GenerateVideoView(self.parent_view.image_path)
-                
-                await interaction.edit_original_response(content=None, attachments=[file], embed=embed, view=view)
+
+                await interaction.edit_original_response(
+                    content=None, attachments=[file], embed=embed, view=view
+                )
                 self.parent_view.interaction_completed = True
                 self.parent_view.stop()
         except Exception as e:
             logger.exception(f"Error in generate_image: {str(e)}")
             try:
-                await interaction.edit_original_response(content="> **Error: An error occurred while generating the image.**", view=None)
+                await interaction.edit_original_response(
+                    content="> **Error: An error occurred while generating the image.**", view=None
+                )
             except (discord.errors.NotFound, discord.errors.InteractionResponded):
-                logger.warning("Cannot edit interaction response - interaction expired or already responded")
+                logger.warning(
+                    "Cannot edit interaction response - interaction expired or already responded"
+                )
             self.parent_view.interaction_completed = True
             self.parent_view.stop()
 
@@ -149,9 +179,9 @@ class AspectRatioView(discord.ui.View):
                 interaction = getattr(self.parent_view, 'interaction', None)
                 if interaction:
                     await interaction.edit_original_response(
-                        content="⏰ **Aspect ratio selection timed out.** Please use `/draw` again to generate a new image.", 
+                        content="⏰ **Aspect ratio selection timed out.** Please use `/draw` again to generate a new image.",
                         view=None,
-                        embed=None
+                        embed=None,
                     )
             except (discord.errors.NotFound, discord.errors.InteractionResponded):
                 logger.warning("Cannot update interaction - it may have expired or been replaced")

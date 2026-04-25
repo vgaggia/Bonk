@@ -1,6 +1,12 @@
 # Generated image files
 images/
 
+# Generated TTS audio files (left over from voice playback)
+temp_tts_*.mp3
+
+# Stray local virtualenvs that don't match the .venv/venv patterns
+10.venv/
+
 config.json
 
 # Byte-compiled / optimized / DLL files

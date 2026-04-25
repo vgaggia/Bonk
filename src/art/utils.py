@@ -8,6 +8,7 @@ logger = logging.getLogger(__name__)
 
 IMAGES_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))), 'images')
 
+
 async def download_image_from_url(url):
     try:
         logger.debug(f"Downloading image from URL: {url}")
@@ -16,7 +17,7 @@ async def download_image_from_url(url):
                 if resp.status != 200:
                     raise Exception(f"HTTP error status: {resp.status}")
                 image_data = await resp.read()
-                
+
         temp_path = os.path.join(IMAGES_DIR, f"temp_image_{int(time.time())}.png")
         with open(temp_path, "wb") as file:
             file.write(image_data)

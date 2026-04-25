@@ -4,112 +4,83 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Development Commands
 
-### Running the Bot
 ```bash
-python main.py
+python main.py                                    # Run the bot (Windows: start.bat)
+pip install -r requirements.txt                   # Runtime deps
+pip install -r dev-requirements.txt               # ruff + pytest
+pytest                                            # Run all tests (quiet mode from pytest.ini)
+pytest tests/test_aspect_ratios.py                # Single test file
+pytest tests/test_aspect_ratios.py::test_dalle_aspect_ratios  # Single test
+ruff check .                                      # Lint (line-length 100, py310 target)
+ruff format .                                     # Format
 ```
 
-### Testing
+External runtime dependencies (not in `requirements.txt`) must be on PATH or configured:
+- **FFmpeg** — required for all voice/audio playback. Override with `FFMPEG_BIN` env var.
+- **libopus** — required for Discord voice. `src/voice.ensure_opus()` tries several load strategies.
+- **PyNaCl** is pinned in `requirements.txt` and is also required for voice.
+
+### WhisperX sidecar (optional local STT)
+
+`whisperx_sidecar/` is a **separate** Python venv that serves local transcription over HTTP on port 5001. It is only reached when `LISTEN_STT_BACKEND=whisperx_http`.
+
 ```bash
-pytest
-pytest tests/test_specific_file.py  # Run single test file
+whisperx_sidecar/install.bat       # Create sidecar venv & install whisperx
+start_local_stt.bat                # Activate sidecar venv and run server.py
 ```
 
-### Code Quality
-```bash
-ruff check .                # Lint code
-ruff format .              # Format code
-```
+## Architecture
 
-### Dependencies
-```bash
-pip install -r requirements.txt          # Production dependencies
-pip install -r dev-requirements.txt      # Development dependencies
-```
+### Command wiring pattern
+All slash commands are registered in `src/bot.py` with `@tree.command(...)` and dispatch to a `handle_*` function in `src/commands/<name>.py`. **`@enqueue` is applied per-command, not universally.** Long-running generation commands (`/chat`, `/draw`, `/imagine`, `/3d`, `/video`, `/tts`, `/listen`) bypass the queue and call `interaction.response.defer(thinking=True)` themselves so they can run in parallel; only short control commands (`/play`, `/stop`, `/pause`, `/resume`, `/next`, `/reset`, `/clear`, `/help`) use `@enqueue` to serialize.
 
-## Code Architecture
+### Per-guild audio bus (`src/audio_bus.py`) — central mixing layer
+Music and TTS do **not** call `voice_client.play()` directly. Each guild has a single `GuildAudioBus` holding a `MixedAudioSource`; playback features add tracks to that mixer. Consequences worth knowing:
 
-### Entry Point
-- `main.py` - Simple entry point that imports and runs the bot
-- `src/bot.py` - Main Discord bot setup with command registration and API client initialization
+- `src/commands/music.py` keeps music at `music_base_volume = 0.4` and `duck_for_tts()` / `unduck_for_tts()` drop it to half while TTS plays. Ducking uses a reference count so overlapping TTS clips don't un-duck prematurely.
+- `/pause` pauses the whole voice client (music + TTS simultaneously) because the mixer is a single source — this is a known limitation documented in `music.py:494`.
+- `/next` calls `bus.stop_track(music_player.current_track)` to end just the music track without killing concurrent TTS, then manually invokes `song_finished` since the normal `on_done` callback is suppressed when a track is stopped early.
+- The voice reply path in `voice_listen.py` also feeds the same bus, so an active listening reply will mix with music.
 
-### Core Systems
+### Voice lifecycle (three independent managers — keep them in sync)
+1. **`src/voice.connect_to_user_channel`** — low-level connect/move/reuse; also decides whether to instantiate a `voice_recv.VoiceRecvClient` so the same connection can receive audio for `/listen`.
+2. **`src/voice_session_manager.VoiceSessionManager`** (global singleton) — 3-minute inactivity disconnect; reschedules itself if the client is still playing, if `/listen` is active, or if the guild is in `stay_guilds` (`/stay on`).
+3. **`MusicPlayer.idle_timeout_task`** — music-specific 120s disconnect after the queue drains.
 
-**Queue Management (`src/queue_manager.py`)**
-- All Discord commands are processed through a centralized queue system
-- Commands decorated with `@enqueue` are automatically queued for sequential processing
-- Prevents rate limiting and ensures stable command execution
+When adding a command that disconnects or changes voice state, clean up in **all three** places or stale state will stay around. See `src/commands/music.py:stop` and `src/commands/tts.py:disconnect_voice` for the template (they each cancel the session manager, clear the music player, and call `bus.stop_all()`).
 
-**Error Handling**
-- Global error handling in `src/error_handler.py` and `src/art/error_handler.py`
-- Interaction-specific error handling for Discord commands
-- Comprehensive logging through `src/log.py`
+### Voice listening (`src/voice_listen.py`)
+Requires the optional `discord-ext-voice-recv` extension. Pipeline per guild:
+- `ListenSession` owns a `TranscriptionSink` that feeds per-user PCM frames into `UserStream` buffers.
+- RMS-based VAD (`VAD_RMS_THRESHOLD = 400`) segments utterances on `SILENCE_WINDOW = 0.8s`; a background `_periodic_flush_check` task flushes stalled streams every 100ms when no new frames arrive.
+- Discord sends 48kHz stereo, so frames are downmixed to mono (`audioop.tomono`) before buffering; audio is normalized toward RMS ~4000 before being handed to Whisper.
+- Completed utterances route to `_transcribe_with_openai` (`WHISPER_MODEL`, default `whisper-1`) or `_transcribe_with_whisperx_http` (the sidecar, `WHISPERX_HTTP_URL`) based on `LISTEN_STT_BACKEND`.
+- `should_respond` gates replies: the bot only speaks if the transcript contains a name from `TRIGGER_NAMES` (including common Whisper mishearings like "balk"/"bulk"), ends in `?`, or lands inside a 10s expectation window opened after the bot asked its own question.
+- Frames received while the mixer has active tracks are dropped to prevent self-feedback.
+- A module-level monkey patch on `discord.ext.voice_recv.opus.Decoder.decode` swallows `OpusError` by returning 20ms of silence, because that upstream exception otherwise kills the packet reader loop.
 
-**Message History (`src/message_history.py`)**
-- Persistent conversation context per user
-- Used by chat commands to maintain conversation state
+### Chat / message history split (`src/responses.py`, `src/message_history.py`)
+There are **two** `MessageHistory` instances:
+- `message_history` (max 10) is keyed by Discord user ID for `/chat`.
+- `voice_message_history` (max 40) is keyed by the literal string `'voice_shared'` — **one guild-wide memory** used when `voice_mode=True`, so multiple speakers in the same voice channel see each other's context.
 
-### AI Integration Modules
+`voice_mode` also swaps to a shorter system prompt tuned for spoken replies. `user_model_preferences` persists the last-used model per user in memory (not on disk).
 
-**Chat (`src/commands/chat.py`)**
-- Multi-AI model support: Claude 4, GPT-4o, local models
-- Model selection via environment variables and user preferences
+Chat backend selection cascades: explicit `model` arg → stored user preference → `CHAT_MODEL` env (mapped in `responses.py` to `anthropic` / `gpt-4o` / `local-model`). Anthropic model name comes from `GPT_ENGINE`.
 
-**Image Generation (`src/art/`)**
-- `image_generation.py` - DALL-E 3 and Stable Diffusion 3 integration
-- `replicate_models.py` - Replicate API model management
-- `utils.py` - Common utilities for image processing
+### Image / video / 3D generation (`src/art/`)
+`image_generation.py` holds DALL-E, Stable Diffusion 3 (Stability AI), GPT Image 1 edit/iterate, and Replicate paths. `replicate_models.py` caches popular-model discovery for 1 hour and falls back to a hardcoded FLUX list on API failure. `video_generation.py` is Luma Labs. UI flows live in `src/ui/` (aspect-ratio picker, model selector, draw buttons) and are wired to command handlers via Discord views.
 
-**Video Generation (`src/art/`)**
-- `video_generation.py` and `video_generation2.py` - Luma Labs integration
-- Support for AI-powered video creation
+### Error handling
+Use `src/error_handler.handle_error(e)` to map errors to user-facing strings (it recognises OpenAI, Anthropic, Stability, Replicate, and Discord exceptions) and `handle_interaction_error(interaction, e)` when you already have the interaction — it picks between `response.send_message` and `followup.send`. There is a second `src/art/error_handler.py` focused on image-generation specifics; don't conflate them.
 
-**3D Models (`src/art/model_3d.py`)**
-- Image-to-3D model generation via Replicate
-
-### UI Components (`src/ui/`)
-- `aspect_ratio_view.py` - Aspect ratio selection for image generation
-- `draw_buttons.py` - Interactive buttons for image generation commands
-- `generate_video_view.py` - Video generation interface
-- `replicate_model_selector.py` - Model selection interface
-
-### Commands Structure (`src/commands/`)
-All Discord slash commands are organized in separate modules:
-- `chat.py` - AI chat functionality
-- `draw.py` - Image generation with multiple models
-- `imagine.py` - Profile picture animation
-- `model_3d.py` - 3D model generation
-- `video.py` - Video generation
-- `tts.py` - Text-to-speech
-- `music.py` - YouTube integration with queue management
-- `help.py`, `reset.py`, `clear.py` - Utility commands
+### Logging
+`src/log.setup_logger(__name__)` gives a color-coded console logger plus a 10MB rotating file handler under `logs/discord_bot.log` that is only active when `LOGGING=True` in `.env`.
 
 ## Configuration
 
-### Required Environment Variables
-Copy `.env.example` to `.env` and configure:
-- `DISCORD_BOT_TOKEN` - Discord bot token
-- `ANTHROPIC_API_KEY` - For Claude 4 integration
-- `OPENAI_API_KEY` - For DALL-E 3 and GPT-4o
-- `STABILITY_API_KEY` - For Stable Diffusion 3
-- `REPLICATE_API_TOKEN` - For various Replicate models
-- `LUMALABS_API_KEY` - For video generation
+`.env` is loaded in both `src/bot.py` and `src/responses.py`; required keys are `DISCORD_BOT_TOKEN` and `ANTHROPIC_API_KEY` (checked in `src/health_check.py` at startup, which also probes the Anthropic API and raises `APIError` if it fails). See `.env.example` for the full list including `LISTEN_STT_BACKEND`, `WHISPERX_HTTP_URL`, `WHISPERX_MODEL`, `LOCAL_API_BASE`, and the per-service keys.
 
-### Key Settings
-- `CHAT_MODEL="ANTHROPIC"` - Default AI model for chat
-- `GPT_ENGINE="claude-sonnet-4-20250514"` - Claude model version
-- `LOGGING="True"` - Enable detailed logging
-
-## Important Patterns
-
-1. **All commands must use `@enqueue` decorator** for proper queue management
-2. **Error handling** - Use existing error handlers rather than creating new ones
-3. **Logging** - Use the configured logger from `src.log`
-4. **API clients** - Anthropic and OpenAI clients are initialized in `src/bot.py`
-5. **Discord interactions** - Commands should handle both deferred and immediate responses
-6. **Health checks** - System performs startup health checks in `src/health_check.py`
-
-## Code Quality Configuration
-- **Ruff** configured in `pyproject.toml` with line length 100, Python 3.10+ target
-- **Pytest** configured for `tests/` directory with quiet output
-- **Import organization** follows ruff's isort-compatible rules
+## Related documents
+- `AGENTS.md` — additional contributor conventions (commit style, test layout).
+- `README.md` — user-facing feature list and setup walkthrough.

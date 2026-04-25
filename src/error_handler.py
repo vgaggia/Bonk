@@ -7,13 +7,16 @@ from openai import OpenAIError
 
 logger = logging.getLogger(__name__)
 
+
 class ContentModerationError(Exception):
     pass
+
 
 class APIError(Exception):
     def __init__(self, message, status_code=None):
         super().__init__(message)
         self.status_code = status_code
+
 
 async def handle_interaction_error(interaction: discord.Interaction, error: Exception) -> None:
     """Handle errors for Discord interactions (async-safe)."""
@@ -25,6 +28,7 @@ async def handle_interaction_error(interaction: discord.Interaction, error: Exce
             await interaction.followup.send(error_message, ephemeral=True)
     except Exception as send_err:
         logger.error(f"Failed to send interaction error message: {send_err}")
+
 
 def handle_error(error, error_type=None):
     """Centralized error handling for all API and general errors"""
@@ -42,7 +46,9 @@ def handle_error(error, error_type=None):
                 return "Your account is not properly set up to use this service. Please contact the administrator."
         elif error.status_code == 403:
             logger.error("OpenAI API: Access forbidden")
-            return "Access to this service is currently restricted. Please contact the administrator."
+            return (
+                "Access to this service is currently restricted. Please contact the administrator."
+            )
         elif error.status_code == 429:
             if "Rate limit reached" in str(error):
                 logger.warning("OpenAI API: Rate limit reached")
@@ -64,7 +70,9 @@ def handle_error(error, error_type=None):
                 error_data = {}
 
             if status_code == 400:
-                logger.error(f"StabilityAI API: Invalid parameters - {error_data.get('errors', [])}")
+                logger.error(
+                    f"StabilityAI API: Invalid parameters - {error_data.get('errors', [])}"
+                )
                 return "Invalid request parameters. Please check your input and try again."
             elif status_code == 403 and error_data.get('name') == 'content_moderation':
                 logger.warning("StabilityAI API: Content moderation flag")

@@ -55,7 +55,12 @@ async def list_voices(search: Optional[str] = None) -> List[Dict[str, Any]]:
                 voices = data.get("voices", data) if isinstance(data, dict) else data
                 if search and isinstance(voices, list) and "search" not in params:
                     term = search.lower()
-                    voices = [v for v in voices if term in str(v.get("name", "")).lower() or term in str(v.get("id", "")).lower()]
+                    voices = [
+                        v
+                        for v in voices
+                        if term in str(v.get("name", "")).lower()
+                        or term in str(v.get("id", "")).lower()
+                    ]
                 return voices or []
     except Exception as e:
         logger.error(f"Error fetching PlayAI voices: {e}")

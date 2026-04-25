@@ -1,4 +1,3 @@
-import logging
 import threading
 from dataclasses import dataclass
 from typing import Callable, Dict, List, Optional
@@ -245,4 +244,3 @@ def get_guild_bus(guild_id: int) -> GuildAudioBus:
         bus = GuildAudioBus()
         _buses[guild_id] = bus
     return bus
-

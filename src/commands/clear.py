@@ -1,8 +1,8 @@
 from src import log
-from src.message_history import MessageHistory
+from src.responses import message_history
 
 logger = log.setup_logger(__name__)
-message_history = MessageHistory()
+
 
 async def handle_clear(interaction):
     user_id = interaction.user.id

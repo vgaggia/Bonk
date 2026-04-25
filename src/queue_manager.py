@@ -8,6 +8,7 @@ from .error_handler import handle_interaction_error
 
 logger = logging.getLogger(__name__)
 
+
 class QueueManager:
     def __init__(self):
         self.queue = asyncio.Queue()
@@ -20,10 +21,10 @@ class QueueManager:
             if not interaction.response.is_done():
                 await interaction.response.defer(thinking=True)
                 logger.debug(f"Deferred interaction {interaction.id}")
-            
+
             await self.queue.put((interaction, task))
             logger.debug(f"Added task to queue for interaction {interaction.id}")
-            
+
             if not self.is_processing:
                 logger.debug("Starting queue processing")
                 asyncio.create_task(self.process_queue())
@@ -35,7 +36,7 @@ class QueueManager:
         """Process tasks in the queue"""
         self.is_processing = True
         logger.info("Started processing queue")
-        
+
         while not self.queue.empty():
             interaction, task = await self.queue.get()
             logger.debug(f"Processing task for interaction {interaction.id}")
@@ -55,25 +56,29 @@ class QueueManager:
         self.is_processing = False
         logger.info("Finished processing queue")
 
+
 queue_manager = QueueManager()
+
 
 def enqueue(func):
     """Decorator to enqueue a command for processing"""
+
     @wraps(func)
     async def wrapper(*args, **kwargs):
         # Find the interaction object
         interaction = next(
-            (arg for arg in args if isinstance(arg, discord.Interaction)),
-            kwargs.get('interaction')
+            (arg for arg in args if isinstance(arg, discord.Interaction)), kwargs.get('interaction')
         )
-        
+
         if not interaction:
             logger.error("Could not find discord.Interaction in arguments")
             raise ValueError("Could not find discord.Interaction in arguments")
-        
+
         logger.debug(f"Enqueueing command {func.__name__} for interaction {interaction.id}")
+
         def task():
             return func(*args, **kwargs)
+
         await queue_manager.add_to_queue(interaction, task)
-    
+
     return wrapper

@@ -7,6 +7,13 @@ import discord
 
 logger = logging.getLogger(__name__)
 
+try:
+    # Optional extension that enables voice receive; when present we use
+    # its VoiceRecvClient so the same connection can both send and receive.
+    from discord.ext import voice_recv  # type: ignore[import]
+except ImportError:  # pragma: no cover - optional dependency
+    voice_recv = None  # type: ignore[assignment]
+
 
 def ffmpeg_executable() -> str:
     """Return the ffmpeg binary to use (env override supported)."""
@@ -26,6 +33,7 @@ def ensure_opus() -> bool:
 
         # Clear problematic OPUS_DLL_PATH if it exists
         import os
+
         if "OPUS_DLL_PATH" in os.environ:
             problematic_path = os.environ["OPUS_DLL_PATH"]
             if not os.path.exists(problematic_path):
@@ -95,7 +103,9 @@ async def connect_to_user_channel(
             raise discord.Forbidden(channel, "Missing permission: CONNECT")
         if not perms.speak:
             raise discord.Forbidden(channel, "Missing permission: SPEAK")
-    guild_client: Optional[discord.VoiceClient] = interaction.guild.voice_client if interaction.guild else None
+    guild_client: Optional[discord.VoiceClient] = (
+        interaction.guild.voice_client if interaction.guild else None
+    )
 
     # Already connected to the same channel
     if guild_client and guild_client.is_connected():
@@ -115,8 +125,41 @@ async def connect_to_user_channel(
 
     # Fresh connect
     try:
-        voice_client = await channel.connect(timeout=timeout, reconnect=reconnect, self_deaf=self_deaf)
+        connect_kwargs = {
+            "timeout": timeout,
+            "reconnect": reconnect,
+            "self_deaf": self_deaf,
+        }
+        # If voice receive extension is available, use its VoiceRecvClient
+        # so the same connection can be used for /listen.
+        if voice_recv is not None:  # type: ignore[truthy-function]
+            connect_kwargs["cls"] = voice_recv.VoiceRecvClient  # type: ignore[attr-defined]
+            # When using voice receive, never self-deafen; otherwise Discord
+            # will not send us other users' audio, and the receive pipeline
+            # (including discord-ext-voice-recv's Opus decoder) can behave badly.
+            connect_kwargs["self_deaf"] = False
+
+        voice_client = await channel.connect(**connect_kwargs)
         return voice_client
+    except discord.ClientException as e:
+        # If we're already connected in this guild, reuse that client
+        # instead of treating it as a hard error.
+        if (
+            "Already connected to a voice channel" in str(e)
+            and interaction.guild
+            and interaction.guild.voice_client
+        ):
+            logger.info(
+                "Reusing existing voice client for guild %s after 'Already connected' error",
+                interaction.guild.id,
+            )
+            return interaction.guild.voice_client
+        logger.error(
+            f"Voice connect failed (guild={interaction.guild_id}, channel={channel.id}): {e}"
+        )
+        raise
     except Exception as e:
-        logger.error(f"Voice connect failed (guild={interaction.guild_id}, channel={channel.id}): {e}")
+        logger.error(
+            f"Voice connect failed (guild={interaction.guild_id}, channel={channel.id}): {e}"
+        )
         raise
