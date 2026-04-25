@@ -679,30 +679,10 @@ async def handle_listen(interaction: discord.Interaction, enable: bool = True) -
             )
             return
 
-        # Discord enforces DAVE end-to-end encryption on all non-stage voice channels
-        # since 2026-03-02. discord-ext-voice-recv 0.5.x doesn't decrypt the MLS layer
-        # yet (upstream issue #53), so received audio in normal voice channels is
-        # ciphertext that decodes to silence. Stage channels remain unencrypted and
-        # work normally. Tell the user up front.
-        is_stage = (
-            voice_client.channel is not None
-            and voice_client.channel.type == discord.ChannelType.stage_voice
+        await interaction.followup.send(
+            f"🎧 Now listening in {voice_client.channel.mention}. Only you can see this.",
+            ephemeral=True,
         )
-        if is_stage:
-            await interaction.followup.send(
-                f"🎧 Now listening in {voice_client.channel.mention}. Only you can see this.",
-                ephemeral=True,
-            )
-        else:
-            await interaction.followup.send(
-                f"🎧 Listening attached in {voice_client.channel.mention}, **but heads up**: "
-                "Discord now requires DAVE end-to-end encryption on regular voice channels, and "
-                "the upstream `discord-ext-voice-recv` library hasn't shipped DAVE decryption yet "
-                "(<https://github.com/imayhaveborkedit/discord-ext-voice-recv/issues/53>). "
-                "I'll receive audio but it'll decode to silence until that lands. Stage channels "
-                "are exempt and still work today.",
-                ephemeral=True,
-            )
     else:
         if not session.active:
             await interaction.followup.send("Listening is not currently enabled.", ephemeral=True)
