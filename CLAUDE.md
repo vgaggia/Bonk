@@ -50,6 +50,9 @@ Music and TTS do **not** call `voice_client.play()` directly. Each guild has a s
 When adding a command that disconnects or changes voice state, clean up in **all three** places or stale state will stay around. See `src/commands/music.py:stop` and `src/commands/tts.py:disconnect_voice` for the template (they each cancel the session manager, clear the music player, and call `bus.stop_all()`).
 
 ### Voice listening (`src/voice_listen.py`)
+
+> **Known limitation as of 2026-04-25:** Discord enforced DAVE (end-to-end encryption) on all non-stage voice channels on 2026-03-02. `discord.py 2.7.1` + `davey 0.1.5` send DAVE-encrypted audio correctly, but `discord-ext-voice-recv 0.5.2a179` does **not yet decrypt** the MLS-protected receive payload — every frame surfaces as `OpusError("corrupted stream")` and decodes to silence. Tracked at upstream [issue #53](https://github.com/imayhaveborkedit/discord-ext-voice-recv/issues/53). Until that lands, `/listen` only produces real transcripts in **stage channels**, which remain DAVE-exempt. The OpusError flood is rate-limited to one log line per 30 seconds and `/listen` warns the invoker up front when joining a non-stage channel.
+
 Requires the optional `discord-ext-voice-recv` extension. Pipeline per guild:
 - `ListenSession` owns a `TranscriptionSink` that feeds per-user PCM frames into `UserStream` buffers.
 - RMS-based VAD (`VAD_RMS_THRESHOLD = 400`) segments utterances on `SILENCE_WINDOW = 0.8s`; a background `_periodic_flush_check` task flushes stalled streams every 100ms when no new frames arrive.

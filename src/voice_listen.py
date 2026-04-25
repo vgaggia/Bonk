@@ -495,15 +495,36 @@ class UserStream:
 if voice_recv is not None:
     # Monkey-patch discord.ext.voice_recv.opus.VoiceDecoder.decode to handle OpusErrors gracefully
     # This is necessary because the library's internal loop crashes on these errors before they reach our sink.
+    #
+    # Post Discord-DAVE-enforcement (2026-03-02), every incoming frame in a non-stage voice
+    # channel arrives MLS-encrypted at the Opus layer because discord-ext-voice-recv hasn't
+    # implemented DAVE receive-side decryption yet (upstream issue #53). Every frame raises
+    # OpusError("corrupted stream"), which floods the log. Rate-limit to one summary line
+    # per 30 seconds so the log stays useful.
     from discord.ext.voice_recv import opus as _recv_opus  # type: ignore
 
     _original_decode = _recv_opus.Decoder.decode
+    _OPUS_ERROR_LOG_INTERVAL = 30.0
+    _opus_error_state = {"count": 0, "last_logged": 0.0, "last_error": ""}
 
     def _safe_decode(self, *args, **kwargs):
         try:
             return _original_decode(self, *args, **kwargs)
         except discord.opus.OpusError as e:
-            logger.warning(f"Caught OpusError in voice decoder: {e} - returning silence")
+            now = time.time()
+            _opus_error_state["count"] += 1
+            _opus_error_state["last_error"] = str(e)
+            if now - _opus_error_state["last_logged"] >= _OPUS_ERROR_LOG_INTERVAL:
+                logger.warning(
+                    "OpusError suppressed %d frame(s) in last %.0fs (last: %s) — "
+                    "likely DAVE-encrypted audio that voice_recv can't decrypt yet "
+                    "(see imayhaveborkedit/discord-ext-voice-recv#53)",
+                    _opus_error_state["count"],
+                    _OPUS_ERROR_LOG_INTERVAL,
+                    _opus_error_state["last_error"],
+                )
+                _opus_error_state["count"] = 0
+                _opus_error_state["last_logged"] = now
             # Return silent PCM frame (20ms of silence at 48kHz stereo 16-bit = 3840 bytes)
             return b'\x00' * 3840
 
@@ -658,10 +679,30 @@ async def handle_listen(interaction: discord.Interaction, enable: bool = True) -
             )
             return
 
-        await interaction.followup.send(
-            f"🎧 Now listening in {voice_client.channel.mention}. Only you can see this.",
-            ephemeral=True,
+        # Discord enforces DAVE end-to-end encryption on all non-stage voice channels
+        # since 2026-03-02. discord-ext-voice-recv 0.5.x doesn't decrypt the MLS layer
+        # yet (upstream issue #53), so received audio in normal voice channels is
+        # ciphertext that decodes to silence. Stage channels remain unencrypted and
+        # work normally. Tell the user up front.
+        is_stage = (
+            voice_client.channel is not None
+            and voice_client.channel.type == discord.ChannelType.stage_voice
         )
+        if is_stage:
+            await interaction.followup.send(
+                f"🎧 Now listening in {voice_client.channel.mention}. Only you can see this.",
+                ephemeral=True,
+            )
+        else:
+            await interaction.followup.send(
+                f"🎧 Listening attached in {voice_client.channel.mention}, **but heads up**: "
+                "Discord now requires DAVE end-to-end encryption on regular voice channels, and "
+                "the upstream `discord-ext-voice-recv` library hasn't shipped DAVE decryption yet "
+                "(<https://github.com/imayhaveborkedit/discord-ext-voice-recv/issues/53>). "
+                "I'll receive audio but it'll decode to silence until that lands. Stage channels "
+                "are exempt and still work today.",
+                ephemeral=True,
+            )
     else:
         if not session.active:
             await interaction.followup.send("Listening is not currently enabled.", ephemeral=True)
