@@ -8,7 +8,7 @@ from openai import AsyncOpenAI
 
 from src import log, responses
 from src.audio_bus import get_guild_bus
-from src.voice import ffmpeg_available, ffmpeg_executable
+from src.voice import _force_cleanup_voice_client, ffmpeg_available, ffmpeg_executable
 from src.voice_session_manager import voice_session_manager
 
 logger = log.setup_logger(__name__)
@@ -248,7 +248,7 @@ async def disconnect_voice(interaction: discord.Interaction) -> None:
         except Exception:
             pass
         voice_session_manager.stay_guilds.discard(interaction.guild.id)
-        await interaction.guild.voice_client.disconnect()
+        await _force_cleanup_voice_client(interaction.guild.voice_client)
         await interaction.response.send_message("Disconnected from voice channel.", ephemeral=True)
     else:
         await interaction.response.send_message(

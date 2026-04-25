@@ -76,6 +76,54 @@ def ensure_opus() -> bool:
         return False
 
 
+def _voice_client_healthy(vc: Optional[discord.VoiceClient]) -> bool:
+    """Return True if vc is actually usable, not just flagged as connected.
+
+    discord.py's `is_connected()` only checks the `_connected` event flag, which
+    is not cleared on every voice-gateway close code (notably 4017). Augment it
+    with a check on the underlying WebSocket so we don't hand a zombie client
+    back to callers like `VoiceRecvClient.listen()` that pass the precheck and
+    then fail downstream.
+    """
+    if vc is None or not vc.is_connected():
+        return False
+    ws = getattr(vc, "ws", None)
+    if ws is None or getattr(ws, "closed", False):
+        return False
+    sock = getattr(ws, "socket", None)
+    if sock is not None and getattr(sock, "closed", False):
+        return False
+    return True
+
+
+async def _force_cleanup_voice_client(vc: Optional[discord.VoiceClient]) -> None:
+    """Best-effort full teardown of a (possibly half-dead) VoiceClient.
+
+    Sends the voice-state update so Discord's server stops listing the bot in
+    the channel, runs the discord.py cleanup that removes the client from the
+    guild's cache, and clears the stale `_connected` flag as a belt-and-braces
+    so any lingering reference can't pass `is_connected()` afterwards.
+    """
+    if vc is None:
+        return
+    try:
+        await vc.disconnect(force=True)
+    except Exception:
+        logger.debug("force disconnect raised; continuing", exc_info=True)
+    try:
+        cleanup = getattr(vc, "cleanup", None)
+        if callable(cleanup):
+            cleanup()
+    except Exception:
+        logger.debug("cleanup() raised; continuing", exc_info=True)
+    try:
+        connected = getattr(vc, "_connected", None)
+        if connected is not None and hasattr(connected, "clear"):
+            connected.clear()
+    except Exception:
+        pass
+
+
 async def connect_to_user_channel(
     interaction: discord.Interaction,
     reconnect: bool = False,
@@ -84,9 +132,9 @@ async def connect_to_user_channel(
 ) -> discord.VoiceClient:
     """Ensure the bot is connected to the user's current voice channel.
 
-    - Reuses the existing guild voice client when possible.
+    - Reuses the existing guild voice client when it passes the health check.
     - Moves the bot if it's in a different channel in the same guild.
-    - Connects fresh if not connected.
+    - Force-cleans any zombie client and connects fresh otherwise.
     """
     if not interaction.user or not getattr(interaction.user, "voice", None):
         raise discord.ClientException("You must be in a voice channel.")
@@ -107,21 +155,25 @@ async def connect_to_user_channel(
         interaction.guild.voice_client if interaction.guild else None
     )
 
-    # Already connected to the same channel
-    if guild_client and guild_client.is_connected():
-        if guild_client.channel and guild_client.channel.id == channel.id:
-            return guild_client
-        # Move within the guild
-        try:
-            await guild_client.move_to(channel)
-            return guild_client
-        except Exception as e:
-            logger.error(f"Failed to move to voice channel: {e}")
-            # Fallback: disconnect and reconnect
+    if guild_client is not None:
+        if _voice_client_healthy(guild_client):
+            if guild_client.channel and guild_client.channel.id == channel.id:
+                return guild_client
             try:
-                await guild_client.disconnect(force=True)
-            except Exception:
-                pass
+                await guild_client.move_to(channel)
+                return guild_client
+            except Exception as e:
+                logger.error("Failed to move to voice channel: %s", e)
+        else:
+            logger.warning(
+                "Guild %s voice_client failed health check (zombie after unclean close); "
+                "forcing cleanup before reconnect",
+                interaction.guild.id if interaction.guild else "?",
+            )
+        # Either the client is a zombie or move_to failed: force-disconnect so
+        # the next channel.connect() doesn't see "Already connected" and so
+        # Discord's server actually retracts the bot from the channel.
+        await _force_cleanup_voice_client(guild_client)
 
     # Fresh connect
     try:
@@ -142,12 +194,13 @@ async def connect_to_user_channel(
         voice_client = await channel.connect(**connect_kwargs)
         return voice_client
     except discord.ClientException as e:
-        # If we're already connected in this guild, reuse that client
-        # instead of treating it as a hard error.
+        # If we're already connected in this guild, reuse that client only when
+        # it's actually healthy; otherwise force-clean it and let the original
+        # failure propagate so the caller can surface a useful error.
         if (
             "Already connected to a voice channel" in str(e)
             and interaction.guild
-            and interaction.guild.voice_client
+            and _voice_client_healthy(interaction.guild.voice_client)
         ):
             logger.info(
                 "Reusing existing voice client for guild %s after 'Already connected' error",
@@ -155,11 +208,20 @@ async def connect_to_user_channel(
             )
             return interaction.guild.voice_client
         logger.error(
-            f"Voice connect failed (guild={interaction.guild_id}, channel={channel.id}): {e}"
+            "Voice connect failed (guild=%s, channel=%s): %s",
+            interaction.guild_id, channel.id, e,
         )
+        if interaction.guild is not None:
+            await _force_cleanup_voice_client(interaction.guild.voice_client)
         raise
     except Exception as e:
         logger.error(
-            f"Voice connect failed (guild={interaction.guild_id}, channel={channel.id}): {e}"
+            "Voice connect failed (guild=%s, channel=%s): %s",
+            interaction.guild_id, channel.id, e,
         )
+        # A close mid-handshake (e.g. 4017 before DAVE) leaves the guild
+        # voice_client half-attached. Force cleanup so the next attempt starts
+        # clean and Discord removes the bot from the channel server-side.
+        if interaction.guild is not None:
+            await _force_cleanup_voice_client(interaction.guild.voice_client)
         raise

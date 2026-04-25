@@ -7,7 +7,13 @@ import yt_dlp
 
 from src import log
 from src.audio_bus import MixerTrack, get_guild_bus
-from src.voice import connect_to_user_channel, ensure_opus, ffmpeg_available, ffmpeg_executable
+from src.voice import (
+    _force_cleanup_voice_client,
+    connect_to_user_channel,
+    ensure_opus,
+    ffmpeg_available,
+    ffmpeg_executable,
+)
 from src.voice_session_manager import voice_session_manager
 
 logger = log.setup_logger(__name__)
@@ -475,7 +481,7 @@ async def stop(interaction: discord.Interaction):
         except Exception:
             # Fallback to stopping the voice client directly
             voice_client.stop()
-        await voice_client.disconnect()
+        await _force_cleanup_voice_client(voice_client)
         music_player.queue.clear()
         music_player.current_song = None
         music_player.current_track = None

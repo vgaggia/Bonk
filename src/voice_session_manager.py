@@ -99,7 +99,9 @@ class VoiceSessionManager:
                 return
 
             if voice_client.is_connected():
-                await voice_client.disconnect()
+                from src.voice import _force_cleanup_voice_client
+
+                await _force_cleanup_voice_client(voice_client)
                 logger.info(
                     f"Auto-disconnected from voice channel in guild {guild_id} after timeout"
                 )

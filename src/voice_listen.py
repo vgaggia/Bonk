@@ -644,8 +644,17 @@ async def handle_listen(interaction: discord.Interaction, enable: bool = True) -
             session.active = False
             session.sink = None
             session.stop_flush_task()
+            # The voice client is almost certainly a zombie at this point
+            # (handshake closed mid-stream). Tear it down so subsequent /listen
+            # attempts start clean and the bot leaves the channel server-side.
+            from src.voice import _force_cleanup_voice_client
+
+            await _force_cleanup_voice_client(voice_client)
+            listen_sessions.pop(guild_id, None)
             await interaction.followup.send(
-                "Failed to start listening in this channel.", ephemeral=True
+                "Couldn't start listening — the voice connection dropped. Try again; "
+                "if I'm still stuck in the channel, run `/disconnect`.",
+                ephemeral=True,
             )
             return
 
