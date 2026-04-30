@@ -21,3 +21,4 @@ youtube-search-python>=1.6.6
 # Upstream issue: https://github.com/imayhaveborkedit/discord-ext-voice-recv/issues/53
 discord-ext-voice-recv @ git+https://github.com/rdphillips7/discord-ext-voice-recv@ddd28601fe556f585b869e215f29c8236b95f88f
 thefuzz>=0.19.0
+elevenlabs>=2.44.0

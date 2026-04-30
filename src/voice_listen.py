@@ -62,6 +62,41 @@ class Utterance:
     ended_at: float
 
 
+LISTEN_BACKEND_OPENAI = "openai"
+LISTEN_BACKEND_ELEVENLABS = "elevenlabs"
+OPENAI_TTS_VOICES = ("alloy", "echo", "fable", "onyx", "nova", "shimmer")
+DEFAULT_OPENAI_TTS_VOICE = "alloy"
+
+
+@dataclass
+class ListenVoiceConfig:
+    """TTS backend + voice used by /listen replies in a single guild."""
+
+    backend: str = LISTEN_BACKEND_OPENAI
+    openai_voice: str = DEFAULT_OPENAI_TTS_VOICE
+    eleven_voice_id: str = ""
+    eleven_model_id: str = ""
+
+
+listen_voice_configs: Dict[int, ListenVoiceConfig] = {}
+
+
+def get_listen_voice_config(guild_id: int) -> ListenVoiceConfig:
+    """Return (and lazily create) the per-guild listen voice config."""
+    cfg = listen_voice_configs.get(guild_id)
+    if cfg is None:
+        from src.tts import eleven  # local import: keeps bot startup light
+
+        cfg = ListenVoiceConfig(
+            backend=LISTEN_BACKEND_OPENAI,
+            openai_voice=DEFAULT_OPENAI_TTS_VOICE,
+            eleven_voice_id=eleven.default_voice_id(),
+            eleven_model_id=eleven.default_model_id(),
+        )
+        listen_voice_configs[guild_id] = cfg
+    return cfg
+
+
 class ListenSession:
     """Per-guild voice listening state."""
 
@@ -305,11 +340,22 @@ class ListenSession:
             self.expecting_reply_until = time.time() + 10.0
             logger.info("Bot asked a question, expecting reply for 10s")
 
-        # Generate TTS using the existing helper and play via the mixer.
+        # Generate TTS using the configured backend and play via the mixer.
+        config = get_listen_voice_config(self.guild_id)
         try:
-            from src.commands.tts import generate_speech  # local import to avoid cycles
+            if config.backend == LISTEN_BACKEND_ELEVENLABS:
+                from src.tts import eleven  # local import to avoid cycles
 
-            audio_path = await generate_speech(reply, "alloy")
+                audio_path = await eleven.synthesize_to_file(
+                    text=reply,
+                    voice_id=config.eleven_voice_id,
+                    model_id=config.eleven_model_id,
+                    output_format=eleven.default_output_format(),
+                )
+            else:
+                from src.commands.tts import generate_speech  # local import to avoid cycles
+
+                audio_path = await generate_speech(reply, config.openai_voice)
         except Exception:
             logger.exception("Failed to generate TTS for voice reply")
             return

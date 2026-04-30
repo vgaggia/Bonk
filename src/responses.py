@@ -37,9 +37,11 @@ elif _chat_model_env in ("local", "local-model"):
 else:
     DEFAULT_CHAT_MODEL = "anthropic"
 
-# Initialize message history and user preferences
-message_history = MessageHistory(max_messages=10)
-voice_message_history = MessageHistory(max_messages=40)  # Quadrupled size for voice chat
+# Initialize message history and user preferences.
+# Both histories use the default Haiku-sized rolling window (token-budget,
+# defined in src/message_history.py).
+message_history = MessageHistory()
+voice_message_history = MessageHistory()
 user_model_preferences = {}  # Store user's last selected model
 
 

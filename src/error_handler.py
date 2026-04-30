@@ -5,6 +5,11 @@ import discord
 import requests
 from openai import OpenAIError
 
+try:
+    from elevenlabs.core.api_error import ApiError as ElevenLabsApiError
+except ImportError:
+    ElevenLabsApiError = None
+
 logger = logging.getLogger(__name__)
 
 
@@ -101,6 +106,24 @@ def handle_error(error, error_type=None):
         elif error.status_code >= 500:
             logger.error(f"Anthropic API: Service error {error.status_code}")
             return "The AI service is currently unavailable. Please try again later."
+
+    # ElevenLabs specific errors
+    elif ElevenLabsApiError is not None and isinstance(error, ElevenLabsApiError):
+        status = getattr(error, "status_code", None)
+        if status == 401:
+            logger.error("ElevenLabs API: Authentication error")
+            return "ElevenLabs API key is invalid or missing. Check ELEVENLABS_API_KEY."
+        if status == 402:
+            logger.error("ElevenLabs API: Quota exceeded")
+            return "ElevenLabs quota exceeded for this billing period."
+        if status == 422:
+            logger.error(f"ElevenLabs API: Request rejected - {getattr(error, 'body', '')}")
+            return "ElevenLabs rejected the request — check the voice ID, model, and text length."
+        if status == 429:
+            logger.warning("ElevenLabs API: Rate limit exceeded")
+            return "ElevenLabs rate limit hit. Try again in a moment."
+        logger.error(f"ElevenLabs API error ({status}): {error}")
+        return f"ElevenLabs error: {error}"
 
     # Discord specific errors
     elif isinstance(error, discord.errors.NotFound):

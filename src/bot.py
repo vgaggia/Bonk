@@ -8,7 +8,20 @@ from dotenv import load_dotenv
 from openai import OpenAI
 
 from src import log, voice_listen
-from src.commands import chat, clear, draw, help, imagine, model_3d, music, reset, tts, video
+from src.commands import (
+    chat,
+    clear,
+    draw,
+    help,
+    imagine,
+    model_3d,
+    music,
+    reset,
+    tts,
+    tts11,
+    video,
+    voice,
+)
 from src.error_handler import handle_error
 from src.health_check import health_check
 from src.queue_manager import enqueue
@@ -210,6 +223,23 @@ async def video_command(interaction: discord.Interaction, prompt: str):
 )
 async def tts_command(interaction: discord.Interaction, text: str, enhance: bool = False):
     await tts.tts_command(interaction, text, enhance)
+
+
+@tree.command(name="tts11", description="Generate text-to-speech via ElevenLabs (model + voice picker)")
+@app_commands.describe(
+    text="The text to convert to speech",
+    enhance="Enhance the text prompt using AI (optional)",
+)
+async def tts11_command(interaction: discord.Interaction, text: str, enhance: bool = False):
+    await tts11.tts11_command(interaction, text, enhance)
+
+
+@tree.command(
+    name="voice",
+    description="Choose the TTS voice used for /listen replies (OpenAI or ElevenLabs)",
+)
+async def voice_command(interaction: discord.Interaction):
+    await voice.voice_command(interaction)
 
 
 @tree.command(name="disconnect", description="Disconnect the bot from voice channel")
