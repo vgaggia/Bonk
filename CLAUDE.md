@@ -29,10 +29,12 @@ whisperx_sidecar/install.bat       # Create sidecar venv & install whisperx
 start_local_stt.bat                # Activate sidecar venv and run server.py
 ```
 
+The HTTP handler lives in `whisperx_sidecar/server.py` and is the only place the sidecar logic exists — the main repo just sends it audio when `LISTEN_STT_BACKEND=whisperx_http`.
+
 ## Architecture
 
 ### Command wiring pattern
-All slash commands are registered in `src/bot.py` with `@tree.command(...)` and dispatch to a `handle_*` function in `src/commands/<name>.py`. **`@enqueue` is applied per-command, not universally.** Long-running generation commands (`/chat`, `/draw`, `/imagine`, `/3d`, `/video`, `/tts`, `/listen`) bypass the queue and call `interaction.response.defer(thinking=True)` themselves so they can run in parallel; only short control commands (`/play`, `/stop`, `/pause`, `/resume`, `/next`, `/reset`, `/clear`, `/help`) use `@enqueue` to serialize.
+All slash commands are registered in `src/bot.py` with `@tree.command(...)` and dispatch to a `handle_*` function in `src/commands/<name>.py`. **`@enqueue` is applied per-command, not universally.** Long-running generation commands (`/chat`, `/draw`, `/imagine`, `/3d`, `/video`, `/tts`, `/tts11`, `/listen`, `/voice`) bypass the queue and call `interaction.response.defer(thinking=True)` themselves so they can run in parallel; only short control commands (`/play`, `/stop`, `/pause`, `/resume`, `/next`, `/reset`, `/clear`, `/help`) use `@enqueue` to serialize. Both paths end up deferred — `QueueManager.add_to_queue` defers the interaction itself before running the task (`src/queue_manager.py:21`), so handlers under `@enqueue` should *not* defer again.
 
 ### Per-guild audio bus (`src/audio_bus.py`) — central mixing layer
 Music and TTS do **not** call `voice_client.play()` directly. Each guild has a single `GuildAudioBus` holding a `MixedAudioSource`; playback features add tracks to that mixer. Consequences worth knowing:
@@ -44,14 +46,14 @@ Music and TTS do **not** call `voice_client.play()` directly. Each guild has a s
 
 ### Voice lifecycle (three independent managers — keep them in sync)
 1. **`src/voice.connect_to_user_channel`** — low-level connect/move/reuse; also decides whether to instantiate a `voice_recv.VoiceRecvClient` so the same connection can receive audio for `/listen`.
-2. **`src/voice_session_manager.VoiceSessionManager`** (global singleton) — 3-minute inactivity disconnect; reschedules itself if the client is still playing, if `/listen` is active, or if the guild is in `stay_guilds` (`/stay on`).
+2. **`src/voice_session_manager.VoiceSessionManager`** (global singleton, constructed with `timeout_minutes=3` at module bottom) — inactivity disconnect; reschedules itself if the client is still playing, if `/listen` is active, or if the guild is in `stay_guilds` (`/stay on`).
 3. **`MusicPlayer.idle_timeout_task`** — music-specific 120s disconnect after the queue drains.
 
 When adding a command that disconnects or changes voice state, clean up in **all three** places or stale state will stay around. See `src/commands/music.py:stop` and `src/commands/tts.py:disconnect_voice` for the template (they each cancel the session manager, clear the music player, and call `bus.stop_all()`).
 
 ### Voice listening (`src/voice_listen.py`)
 
-> **Voice receive is currently on a third-party fork.** Discord enforced DAVE end-to-end encryption (its in-house E2EE protocol for voice/video, short for *Discord Audio & Video End-to-end encryption*) on all non-stage voice channels on 2026-03-02. The PyPI release of `discord-ext-voice-recv` (0.5.2a179, June 2025) predates that and doesn't peel off the E2EE layer before handing bytes to libopus, so every frame surfaces as `OpusError("corrupted stream")` and decodes to silence. `requirements.txt` therefore pins to [`rdphillips7/discord-ext-voice-recv@ddd28601`](https://github.com/rdphillips7/discord-ext-voice-recv) — the open [PR #54](https://github.com/imayhaveborkedit/discord-ext-voice-recv/pull/54) that calls `davey.DaveSession.decrypt()` between SRTP-decrypt and Opus-decode. Multiple unrelated users (RyanStudioo, WiZeYAR, doryiii, tmorgan181) confirmed the patch fixes the corruption. **Drop the fork pin and switch back to PyPI as soon as PR #54 merges.** Known edge case (Tiger-I-Yang, 2026-03-28): users joining from Discord's website on Safari iPhone are not heard correctly; root cause unresolved upstream. The rate-limited Opus-error warning in `src/voice_listen.py` is kept as defense-in-depth — it stays silent when decryption succeeds.
+> **Voice receive is currently on a third-party fork.** `requirements.txt` pins `discord-ext-voice-recv` to [`rdphillips7/discord-ext-voice-recv@ddd28601`](https://github.com/rdphillips7/discord-ext-voice-recv) — the open [PR #54](https://github.com/imayhaveborkedit/discord-ext-voice-recv/pull/54) that calls `davey.DaveSession.decrypt()` between SRTP-decrypt and Opus-decode. The PyPI release predates Discord's DAVE E2EE rollout (enforced on non-stage channels 2026-03-02) and decodes every frame to silence with `OpusError("corrupted stream")`. **Drop the fork pin and switch back to PyPI once PR #54 merges.** The rate-limited Opus-error warning in `src/voice_listen.py` is defense-in-depth — silent when decryption succeeds. Full incident details, contributor confirmations, and the unresolved Safari-iPhone edge case are in `VOICE_LISTENING.md` and the message of commit `c0ba8b6`.
 
 Requires the optional `discord-ext-voice-recv` extension. Pipeline per guild:
 - `ListenSession` owns a `TranscriptionSink` that feeds per-user PCM frames into `UserStream` buffers.
@@ -64,12 +66,19 @@ Requires the optional `discord-ext-voice-recv` extension. Pipeline per guild:
 
 ### Chat / message history split (`src/responses.py`, `src/message_history.py`)
 There are **two** `MessageHistory` instances:
-- `message_history` (max 10) is keyed by Discord user ID for `/chat`.
-- `voice_message_history` (max 40) is keyed by the literal string `'voice_shared'` — **one guild-wide memory** used when `voice_mode=True`, so multiple speakers in the same voice channel see each other's context.
+- `message_history` is keyed by Discord user ID for `/chat`.
+- `voice_message_history` is keyed by the literal string `'voice_shared'` — **one guild-wide memory** used when `voice_mode=True`, so multiple speakers in the same voice channel see each other's context.
+
+Both share the same rolling-window cap: `DEFAULT_HISTORY_TOKEN_BUDGET = 190_000` tokens, sized to fit Claude Haiku's 200K context window with headroom for the system prompt, current user message, and `MAX_TOKENS` (1000) of output. The cap is token-budget, not message-count — eviction uses a coarse `len(content)//4` estimator and pops oldest messages until under budget. Tweak the budget in `message_history.py` if a smaller-context model is targeted.
 
 `voice_mode` also swaps to a shorter system prompt tuned for spoken replies. `user_model_preferences` persists the last-used model per user in memory (not on disk).
 
 Chat backend selection cascades: explicit `model` arg → stored user preference → `CHAT_MODEL` env (mapped in `responses.py` to `anthropic` / `gpt-4o` / `local-model`). Anthropic model name comes from `GPT_ENGINE`.
+
+### TTS backends (`src/tts/`)
+Two backends live side-by-side: `playai.py` powers `/tts` (PlayAI/PlayHT via Replicate), and `eleven.py` powers `/tts11` (ElevenLabs SDK — module is named `eleven.py` deliberately so it doesn't shadow the `elevenlabs` package). Both produce a temp audio file that the command handler hands to the audio bus; `/tts11` adds a model/voice picker UI. ElevenLabs config keys live under `ELEVENLABS_*` in `.env`.
+
+`/listen` reply audio is configured separately via `/voice` (`src/commands/voice.py`). It writes to a per-guild `ListenVoiceConfig` (defined in `voice_listen.py`) selecting either the OpenAI `tts-1` voice (`alloy` … `shimmer`, default `alloy`) or an ElevenLabs voice+model. `ListenSession._handle_utterance` reads that config when synthesizing a reply, so `/voice` is the only place that controls how Bonk *sounds* in voice channels — `GPT_ENGINE` / `CHAT_MODEL` / per-user model prefs still control what Bonk *says*.
 
 ### Image / video / 3D generation (`src/art/`)
 `image_generation.py` holds DALL-E, Stable Diffusion 3 (Stability AI), GPT Image 1 edit/iterate, and Replicate paths. `replicate_models.py` caches popular-model discovery for 1 hour and falls back to a hardcoded FLUX list on API failure. `video_generation.py` is Luma Labs. UI flows live in `src/ui/` (aspect-ratio picker, model selector, draw buttons) and are wired to command handlers via Discord views.
@@ -83,6 +92,8 @@ Use `src/error_handler.handle_error(e)` to map errors to user-facing strings (it
 ## Configuration
 
 `.env` is loaded in both `src/bot.py` and `src/responses.py`; required keys are `DISCORD_BOT_TOKEN` and `ANTHROPIC_API_KEY` (checked in `src/health_check.py` at startup, which also probes the Anthropic API and raises `APIError` if it fails). See `.env.example` for the full list including `LISTEN_STT_BACKEND`, `WHISPERX_HTTP_URL`, `WHISPERX_MODEL`, `LOCAL_API_BASE`, and the per-service keys.
+
+Run `python -m src.health_check` to validate the env keys and probe the Anthropic API without booting the Discord client.
 
 ## Related documents
 - `AGENTS.md` — additional contributor conventions (commit style, test layout).

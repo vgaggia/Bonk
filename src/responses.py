@@ -1,6 +1,7 @@
 import asyncio
 import logging
 import os
+from typing import Optional
 
 import anthropic
 import requests
@@ -69,7 +70,13 @@ except APIError as e:
 class ModelAPIs:
     @staticmethod
     async def anthropic_api(
-        client, message, model, user_id=None, voice_mode=False, extra_context=None
+        client,
+        message,
+        model,
+        user_id=None,
+        voice_mode=False,
+        extra_context=None,
+        memory_block=None,
     ):
         """Handle Anthropic API calls with message history"""
         messages = []
@@ -106,6 +113,9 @@ class ModelAPIs:
                 "especially when they will be spoken aloud via TTS."
             )
 
+        if memory_block:
+            system_content = f"{system_content}\n\n{memory_block}"
+
         loop = asyncio.get_running_loop()
         response = await loop.run_in_executor(
             None,
@@ -130,7 +140,14 @@ class ModelAPIs:
 
     @staticmethod
     async def openai_like_api(
-        base_url, api_key, message, model, user_id=None, voice_mode=False, extra_context=None
+        base_url,
+        api_key,
+        message,
+        model,
+        user_id=None,
+        voice_mode=False,
+        extra_context=None,
+        memory_block=None,
     ):
         """Handle OpenAI-like API calls with message history"""
         headers = {"Content-Type": "application/json"}
@@ -141,17 +158,26 @@ class ModelAPIs:
 
         messages = []
 
-        # Add system message
+        # Build the system prompt once. If a memory block is supplied, append
+        # it to whichever base system text we'd normally use, and reuse the
+        # same text everywhere downstream (notably the local-model payload's
+        # `system_prompt` key, which would otherwise overwrite it).
+        system_prompt_text: Optional[str] = None
         if voice_mode:
-            voice_system = (
+            system_prompt_text = (
                 "You are Bonk in a Discord voice chat. "
                 "Keep responses VERY short and conversational - like you're actually talking. "
                 "Use 1-2 short sentences maximum. Think casual speech, not essays. "
                 "Be natural and concise like real conversation."
             )
-            messages.append({"role": "system", "content": voice_system})
         elif model == "local-model":
-            messages.append({"role": "system", "content": LOCAL_SYSTEM_PROMPT})
+            system_prompt_text = LOCAL_SYSTEM_PROMPT
+
+        if system_prompt_text is not None and memory_block:
+            system_prompt_text = f"{system_prompt_text}\n\n{memory_block}"
+
+        if system_prompt_text is not None:
+            messages.append({"role": "system", "content": system_prompt_text})
 
         # Add message history
         if voice_mode:
@@ -174,14 +200,15 @@ class ModelAPIs:
             "temperature": 0.7,
         }
 
-        # Add chat mode, character, and preset for local model
+        # Add chat mode, character, and preset for local model. Reuse the
+        # already-augmented system prompt so memory_block is not lost.
         if model == "local-model":
             payload = {
                 **payload,
                 "mode": "chat",
                 "character": "vgaggia",
                 "preset": "My Preset",
-                "system_prompt": LOCAL_SYSTEM_PROMPT,  # Add system prompt directly in payload
+                "system_prompt": system_prompt_text or LOCAL_SYSTEM_PROMPT,
             }
 
         try:
@@ -216,7 +243,12 @@ class ModelAPIs:
 
 
 async def handle_response(
-    message, model=None, user_id=None, voice_mode=False, extra_context=None
+    message,
+    model=None,
+    user_id=None,
+    voice_mode=False,
+    extra_context=None,
+    memory_block=None,
 ) -> str:
     """Handle user message and get AI response with model selection and message history"""
     if not message or not message.strip():
@@ -239,7 +271,13 @@ async def handle_response(
     try:
         if model == 'anthropic':
             return await ModelAPIs.anthropic_api(
-                anthropic_client, message, CLAUDE_MODEL, user_id, voice_mode, extra_context
+                anthropic_client,
+                message,
+                CLAUDE_MODEL,
+                user_id,
+                voice_mode,
+                extra_context,
+                memory_block,
             )
         elif model == 'gpt-4o':
             gpt4o_key = os.getenv("OPENAI_API_KEY")
@@ -253,6 +291,7 @@ async def handle_response(
                 user_id,
                 voice_mode,
                 extra_context,
+                memory_block,
             )
         elif model == 'local-model':
             local_key = os.getenv("LOCAL_MODEL_API_KEY")  # Optional for local models
@@ -264,6 +303,7 @@ async def handle_response(
                 user_id,
                 voice_mode,
                 extra_context,
+                memory_block,
             )
         else:
             raise ValueError(f"Unsupported model: {model}")

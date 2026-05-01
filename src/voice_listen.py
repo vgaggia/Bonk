@@ -1,18 +1,25 @@
 import asyncio
 import audioop
+import concurrent.futures
 import os
 import tempfile
 import time
 import wave
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Set
 
 import discord
 from openai import OpenAI
 
 from src import log, responses
 from src.audio_bus import get_guild_bus
+from src.voice_memory import (
+    EXTRACTION_TRANSCRIPT_LINES,
+    MEMORY_EXTRACTION_MODEL,
+    ExtractionWorker,
+    voice_memory_store,
+)
 
 logger = log.setup_logger(__name__)
 
@@ -60,6 +67,26 @@ class Utterance:
     text: str
     started_at: float
     ended_at: float
+
+
+def _log_task_exception(task: asyncio.Task) -> None:
+    """Done-callback that surfaces unhandled exceptions in fire-and-forget tasks."""
+    if task.cancelled():
+        return
+    try:
+        exc = task.exception()
+    except (asyncio.CancelledError, asyncio.InvalidStateError):
+        return
+    if exc is not None:
+        logger.error("Background voice task failed", exc_info=exc)
+
+
+def _strip_name_prefix(text: str, name: str) -> str:
+    """Remove a leading 'Name: ' prefix if it matches the given name."""
+    prefix = f"{name}: "
+    if text.startswith(prefix):
+        return text[len(prefix):]
+    return text
 
 
 LISTEN_BACKEND_OPENAI = "openai"
@@ -116,6 +143,17 @@ class ListenSession:
         self.sink: Optional["TranscriptionSink"] = None
         self._flush_task: Optional[asyncio.Task] = None
         self.expecting_reply_until: float = 0.0
+        # Per-guild memory extraction worker. The worker is a thin wrapper around
+        # the module-level voice_memory_store; the store outlives sessions.
+        self.memory_worker = ExtractionWorker(
+            guild_id=guild_id,
+            store=voice_memory_store,
+            anthropic_client=responses.anthropic_client,
+            model=MEMORY_EXTRACTION_MODEL,
+        )
+        # Track in-flight utterance-processing futures so /listen disable can
+        # wait briefly for transcriptions to land before flushing memory.
+        self._processing_futures: Set[concurrent.futures.Future] = set()
 
     def on_frame(self, user: Optional[discord.abc.User], pcm: bytes) -> None:
         """Receive one PCM frame for a specific user."""
@@ -141,6 +179,96 @@ class ListenSession:
         except Exception:
             logger.exception("Error processing audio frame for user %s", user_id)
 
+    def _present_voice_users(self) -> tuple[List[int], Dict[int, str]]:
+        """Return (user_ids, {user_id: display_name}) for non-bot members in the channel."""
+        ids: List[int] = []
+        names: Dict[int, str] = {}
+        channel = getattr(self.voice_client, "channel", None)
+        bot_user_id = (
+            self.voice_client.client.user.id
+            if self.voice_client and self.voice_client.client and self.voice_client.client.user
+            else None
+        )
+        if channel is None:
+            return ids, names
+        try:
+            members = list(getattr(channel, "members", []) or [])
+        except Exception:
+            return ids, names
+        for m in members:
+            try:
+                if m.bot or (bot_user_id is not None and m.id == bot_user_id):
+                    continue
+                ids.append(m.id)
+                names[m.id] = m.display_name or m.name or f"User {m.id}"
+            except Exception:
+                continue
+        return ids, names
+
+    def _bot_user_id(self) -> Optional[int]:
+        try:
+            user = self.voice_client.client.user
+            return user.id if user else None
+        except Exception:
+            return None
+
+    async def _drain_processing(self, timeout: float = 5.0) -> None:
+        """Wait (up to `timeout`) for in-flight utterance-processing tasks to
+        finish, so a downstream memory flush sees fully-transcribed history."""
+        if not self._processing_futures:
+            return
+        # Snapshot the current set; new futures arriving after this are not waited on.
+        pending = list(self._processing_futures)
+        if not pending:
+            return
+        wrapped = [asyncio.wrap_future(f) for f in pending]
+        try:
+            await asyncio.wait_for(
+                asyncio.gather(*wrapped, return_exceptions=True), timeout=timeout
+            )
+        except asyncio.TimeoutError:
+            logger.warning(
+                "Drain timeout: %d transcription task(s) still running on disable",
+                sum(1 for w in wrapped if not w.done()),
+            )
+
+    def _schedule_extraction(self) -> None:
+        """Build the extraction inputs (filtered for opt-out and bot self) and
+        kick off a debounced background extraction task. The worker debounces
+        internally, so calling this on every utterance is cheap."""
+        present_user_ids, present_names_by_id = self._present_voice_users()
+        # Drop opted-out users from BOTH the speaker set and the transcript
+        # window; their utterances are not used to write any memory anywhere.
+        opted_in_ids = [
+            uid for uid in present_user_ids
+            if not voice_memory_store.is_opted_out(self.guild_id, uid)
+        ]
+        opted_in_names = {uid: present_names_by_id[uid] for uid in opted_in_ids if uid in present_names_by_id}
+
+        bot_uid = self._bot_user_id()
+        user_lines: List[str] = []
+        for u in self.last_utterances[-EXTRACTION_TRANSCRIPT_LINES:]:
+            if bot_uid is not None and u.user_id == bot_uid:
+                continue   # belt-and-suspenders; bot utterances shouldn't be in this list
+            if voice_memory_store.is_opted_out(self.guild_id, u.user_id):
+                continue
+            # Tag each line with the speaker's stable label so the extractor
+            # cannot cross-attribute users with identical display names.
+            label_name = present_names_by_id.get(u.user_id) or "User"
+            user_lines.append(f"[{label_name} (speaker_{u.user_id})] {_strip_name_prefix(u.text, label_name)}")
+
+        if not user_lines or not opted_in_ids:
+            return
+
+        task = asyncio.create_task(
+            self.memory_worker.maybe_run(
+                transcript_user_lines=user_lines,
+                present_user_ids=opted_in_ids,
+                display_names_by_id=opted_in_names,
+            )
+        )
+        task.add_done_callback(_log_task_exception)
+
     def enqueue_utterance(
         self, user_id: int, pcm: bytes, started_at: float, ended_at: float
     ) -> None:
@@ -150,9 +278,14 @@ class ListenSession:
             await self._handle_utterance(user_id, pcm, started_at, ended_at)
 
         try:
-            asyncio.run_coroutine_threadsafe(_process(), self.loop)
+            future = asyncio.run_coroutine_threadsafe(_process(), self.loop)
         except Exception:
             logger.exception("Failed to schedule utterance processing")
+            return
+
+        # Track the future so /listen disable can drain in-flight work.
+        self._processing_futures.add(future)
+        future.add_done_callback(self._processing_futures.discard)
 
     async def _watchdog_task(self) -> None:
         """Monitor the voice receiver for crashes and restart if needed."""
@@ -294,6 +427,15 @@ class ListenSession:
         if user:
             username = user.display_name
 
+        # Keep stored display_name in sync so memory blocks always render with
+        # the current nickname. Skip for opted-out users — we don't write to
+        # their record at all.
+        try:
+            if not voice_memory_store.is_opted_out(self.guild_id, user_id):
+                voice_memory_store.update_display_name(self.guild_id, user_id, username)
+        except Exception:
+            logger.exception("Failed to update memory display_name")
+
         # Prepend username to transcript
         full_transcript = f"{username}: {transcript}"
         logger.info("Heard from user %s (%s): %s", user_id, username, transcript)
@@ -306,6 +448,26 @@ class ListenSession:
         )
         if len(self.last_utterances) > 50:
             self.last_utterances.pop(0)
+
+        # Note that we have a new user utterance for the memory worker. Counting
+        # all user turns (not just trigger-gated ones) so quiet conversations
+        # eventually get extracted too. Skip opted-out speakers entirely so
+        # their utterances neither bump the counter nor enter the extraction
+        # transcript.
+        speaker_opted_out = voice_memory_store.is_opted_out(self.guild_id, user_id)
+        if not speaker_opted_out:
+            try:
+                self.memory_worker.note_new_user_utterance()
+            except Exception:
+                logger.exception("Failed to record memory pending count")
+
+            # Schedule extraction on EVERY accepted utterance — debounced inside
+            # the worker. This is the fix for the bug where quiet conversations
+            # (Bonk doesn't reply) never extracted until /listen disable.
+            try:
+                self._schedule_extraction()
+            except Exception:
+                logger.exception("Failed to schedule memory extraction")
 
         now = time.time()
         expecting_reply = now < self.expecting_reply_until
@@ -322,11 +484,33 @@ class ListenSession:
         if expecting_reply:
             self.expecting_reply_until = 0.0
 
+        # Build the present-users snapshot (for memory injection only —
+        # extraction was already scheduled above).
+        present_user_ids, present_names_by_id = self._present_voice_users()
+
+        # Render the memory block for the speaker + others present.
+        memory_block: Optional[str] = None
+        try:
+            memory_block = voice_memory_store.format_for_prompt(
+                guild_id=self.guild_id,
+                speaker_user_id=user_id,
+                present_user_ids=present_user_ids,
+                speaker_display_name=username,
+                present_display_names=present_names_by_id,
+            ) or None
+        except Exception:
+            logger.exception("Failed to render voice memory block")
+            memory_block = None
+
         # Use existing chat pipeline to generate a reply.
         # Use voice_mode=True for shorter, more conversational responses
         try:
             reply = await responses.handle_response(
-                full_transcript, user_id=user_id, voice_mode=True, extra_context=None
+                full_transcript,
+                user_id=user_id,
+                voice_mode=True,
+                extra_context=None,
+                memory_block=memory_block,
             )
         except Exception:
             logger.exception("Error generating voice reply")
@@ -752,6 +936,47 @@ async def handle_listen(interaction: discord.Interaction, enable: bool = True) -
             except Exception:
                 logger.exception("Error cleaning up TranscriptionSink")
             session.sink = None
+
+        # Drain in-flight utterance-processing tasks so the memory flush sees
+        # a fully-transcribed last_utterances list. Bounded — never wait
+        # forever.
+        try:
+            await session._drain_processing(timeout=5.0)
+        except Exception:
+            logger.exception("Error draining utterance tasks on /listen disable")
+
+        # Force a final memory extraction over what was heard, so any pending
+        # facts land before the session is torn down.
+        try:
+            present_ids, present_names_by_id = session._present_voice_users()
+            opted_in_ids = [
+                uid for uid in present_ids
+                if not voice_memory_store.is_opted_out(session.guild_id, uid)
+            ]
+            opted_in_names = {
+                uid: present_names_by_id[uid]
+                for uid in opted_in_ids
+                if uid in present_names_by_id
+            }
+            bot_uid = session._bot_user_id()
+            user_lines: List[str] = []
+            for u in session.last_utterances[-EXTRACTION_TRANSCRIPT_LINES:]:
+                if bot_uid is not None and u.user_id == bot_uid:
+                    continue
+                if voice_memory_store.is_opted_out(session.guild_id, u.user_id):
+                    continue
+                label_name = present_names_by_id.get(u.user_id) or "User"
+                user_lines.append(
+                    f"[{label_name} (speaker_{u.user_id})] {_strip_name_prefix(u.text, label_name)}"
+                )
+            if user_lines and opted_in_ids:
+                await session.memory_worker.flush(
+                    transcript_user_lines=user_lines,
+                    present_user_ids=opted_in_ids,
+                    display_names_by_id=opted_in_names,
+                )
+        except Exception:
+            logger.exception("Error flushing memory worker on /listen disable")
 
         session.user_streams.clear()
 

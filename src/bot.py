@@ -12,8 +12,10 @@ from src.commands import (
     chat,
     clear,
     draw,
+    forget,
     help,
     imagine,
+    memories,
     model_3d,
     music,
     reset,
@@ -172,6 +174,41 @@ async def reset_command(interaction: discord.Interaction):
 @enqueue
 async def clear_command(interaction: discord.Interaction):
     await clear.handle_clear(interaction)
+
+
+@tree.command(
+    name="memories",
+    description="Show what Bonk has remembered about you from /listen voice chats",
+)
+async def memories_command(interaction: discord.Interaction):
+    # Defer ephemerally so the "thinking…" indicator is private; @enqueue's
+    # default defer is public.
+    await interaction.response.defer(ephemeral=True, thinking=True)
+    await memories.handle_memories(interaction)
+
+
+@tree.command(
+    name="forget",
+    description="Wipe what Bonk remembers (or change your opt-out preference)",
+)
+@app_commands.describe(
+    scope="What to forget: just your data (default), wipe + opt out, re-enable memory, or admin-wipe the whole server"
+)
+@app_commands.choices(
+    scope=[
+        app_commands.Choice(name="Just me", value="me"),
+        app_commands.Choice(name="Wipe & opt out", value="me_and_optout"),
+        app_commands.Choice(name="Re-enable memory", value="optin"),
+        app_commands.Choice(name="All users (admin)", value="all"),
+    ]
+)
+async def forget_command(
+    interaction: discord.Interaction,
+    scope: app_commands.Choice[str] = None,
+):
+    # Same ephemeral-defer treatment as /memories.
+    await interaction.response.defer(ephemeral=True, thinking=True)
+    await forget.handle_forget(interaction, scope.value if scope else "me")
 
 
 @tree.command(name="help", description="Show help for the bot")
