@@ -7,7 +7,7 @@ import time
 import wave
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Dict, List, Optional, Set
+from typing import Awaitable, Callable, Dict, List, Optional, Set
 
 import discord
 from openai import OpenAI
@@ -124,6 +124,263 @@ def get_listen_voice_config(guild_id: int) -> ListenVoiceConfig:
     return cfg
 
 
+@dataclass
+class BatchedUtterance:
+    """One transcribed utterance handed to the ReplyScheduler.
+
+    Snapshots `expecting_reply` and `passes_should_respond` at handoff time
+    rather than re-evaluating later, so a flag flipped during the merge
+    window doesn't change the batched decision retroactively.
+    """
+
+    user_id: int
+    display_name: str
+    transcript: str
+    full_transcript: str
+    arrived_at: float
+    started_at: float
+    ended_at: float
+    expecting_reply: bool
+    passes_should_respond: bool
+
+
+class ReplyScheduler:
+    """Per-guild coalescing scheduler for /listen replies.
+
+    Replaces the old "every utterance fires its own reply" pattern with a
+    batched one-reply-at-a-time pipeline:
+
+    - Single drainer task, so only one batch is ever in flight.
+    - Utterances arriving while a reply is being produced queue up and are
+      delivered together in the next batch.
+    - Single-speaker case adds only ~MERGE_SETTLE seconds of latency; the
+      multi-speaker case waits up to MERGE_DEADLINE_SHORT (1.5s) for a
+      sibling utterance to land, with a hard cap at MERGE_DEADLINE_HARD (3s).
+    """
+
+    MERGE_SETTLE = 0.20
+    MERGE_DEADLINE_SHORT = 1.50
+    MERGE_DEADLINE_HARD = 3.00
+    POLL_INTERVAL = 0.10
+
+    def __init__(
+        self,
+        session: "ListenSession",
+        produce_reply: Optional[Callable[[List[BatchedUtterance]], Awaitable[None]]] = None,
+        probe_user_streams: Optional[Callable[[], Set[int]]] = None,
+    ) -> None:
+        self.session = session
+        self.pending: List[BatchedUtterance] = []
+        self.in_flight: bool = False
+        self._kick = asyncio.Event()
+        self._loop_task: Optional[asyncio.Task] = None
+        self._stopping: bool = False
+        self._produce_reply = produce_reply or self._default_produce_reply
+        self._probe_user_streams = probe_user_streams or self._default_probe_user_streams
+
+    def _default_probe_user_streams(self) -> Set[int]:
+        try:
+            return {
+                uid for uid, s in self.session.user_streams.items()
+                if getattr(s, "active", False)
+            }
+        except Exception:
+            return set()
+
+    def add(self, u: BatchedUtterance) -> None:
+        self.pending.append(u)
+        self._kick.set()
+
+    def start(self) -> None:
+        if self._loop_task is None or self._loop_task.done():
+            self._stopping = False
+            self._loop_task = asyncio.create_task(self._loop())
+            self._loop_task.add_done_callback(_log_task_exception)
+
+    def stop(self) -> None:
+        self._stopping = True
+        self._kick.set()
+        # Don't cancel: let any in-flight _produce_reply finish so we don't
+        # leave history half-written. Callers should `await flush()` first
+        # for a clean drain.
+
+    async def flush(self, timeout: float = 4.0) -> None:
+        """Drain pending utterances and wait for any in-flight reply.
+
+        Bounded by `timeout`. Returns even if some pending utterances were
+        not produced (they'll be logged)."""
+        deadline = time.time() + timeout
+        self._kick.set()
+        while time.time() < deadline:
+            if not self.pending and not self.in_flight:
+                return
+            await asyncio.sleep(0.05)
+        if self.pending or self.in_flight:
+            logger.warning(
+                "ReplyScheduler.flush timed out: %d pending, in_flight=%s",
+                len(self.pending), self.in_flight,
+            )
+
+    async def _loop(self) -> None:
+        try:
+            while not self._stopping:
+                await self._kick.wait()
+                self._kick.clear()
+                if self._stopping:
+                    return
+                if not self.pending:
+                    continue
+                await self._wait_for_quiet()
+                if not self.pending:
+                    continue
+                batch = list(self.pending)
+                self.pending.clear()
+                self.in_flight = True
+                try:
+                    await self._produce_reply(batch)
+                except Exception:
+                    logger.exception("ReplyScheduler._produce_reply failed")
+                finally:
+                    self.in_flight = False
+                    if self.pending:
+                        self._kick.set()
+        except asyncio.CancelledError:
+            return
+        except Exception:
+            logger.exception("ReplyScheduler._loop crashed")
+
+    async def _wait_for_quiet(self) -> None:
+        """Wait until the merge window settles or one of the deadlines fires.
+
+        Exit conditions, in priority order:
+        - Hard cap: `elapsed_first >= MERGE_DEADLINE_HARD`. Always exits.
+        - Settled fast path: nobody else is mid-utterance AND the most recent
+          arrival is at least `MERGE_SETTLE` old. Covers single-speaker.
+        - Short cap with no others currently speaking: `elapsed_first
+          >= MERGE_DEADLINE_SHORT` and nobody else is mid-utterance. Snaps the
+          batch closed in busy multi-speaker scenarios where the settle
+          condition keeps being reset.
+
+        While someone *is* mid-utterance and HARD hasn't fired, keep waiting
+        — they're about to flush and join this batch.
+        """
+        while not self._stopping and self.pending:
+            now = time.time()
+            first = self.pending[0]
+            last = self.pending[-1]
+            elapsed = now - first.arrived_at
+            if elapsed >= self.MERGE_DEADLINE_HARD:
+                return
+            batched_uids = {u.user_id for u in self.pending}
+            try:
+                others_speaking = self._probe_user_streams() - batched_uids
+            except Exception:
+                others_speaking = set()
+            if not others_speaking and (now - last.arrived_at) >= self.MERGE_SETTLE:
+                return
+            if elapsed >= self.MERGE_DEADLINE_SHORT and not others_speaking:
+                return
+            await asyncio.sleep(self.POLL_INTERVAL)
+
+    async def _default_produce_reply(self, batch: List[BatchedUtterance]) -> None:
+        """Build the prompt for a batch and feed the rest of the reply pipeline."""
+        any_respondable = any(
+            u.passes_should_respond or u.expecting_reply for u in batch
+        )
+        if not any_respondable:
+            # User-side history was already recorded by _handle_utterance.
+            return
+
+        present_user_ids, present_names_by_id = self.session._present_voice_users()
+        speaker = batch[-1]
+
+        memory_block: Optional[str] = None
+        try:
+            memory_block = voice_memory_store.format_for_prompt(
+                guild_id=self.session.guild_id,
+                speaker_user_id=speaker.user_id,
+                present_user_ids=present_user_ids,
+                speaker_display_name=speaker.display_name,
+                present_display_names=present_names_by_id,
+            ) or None
+        except Exception:
+            logger.exception("Failed to render voice memory block for batch")
+
+        if len(batch) == 1:
+            message = batch[0].full_transcript
+        else:
+            lines = [f"{u.display_name}: {u.transcript}" for u in batch]
+            message = (
+                "Multiple people just spoke. Address each in a single short reply.\n"
+                + "\n".join(lines)
+            )
+
+        if any(u.expecting_reply for u in batch):
+            self.session.expecting_reply_until = 0.0
+
+        try:
+            reply = await responses.handle_response(
+                message,
+                user_id=speaker.user_id,
+                voice_mode=True,
+                extra_context=None,
+                memory_block=memory_block,
+                record_history=False,
+            )
+        except Exception:
+            logger.exception("Error generating batched voice reply")
+            return
+
+        if not reply or not reply.strip():
+            return
+
+        try:
+            responses.voice_message_history.add_message('voice_shared', "assistant", reply)
+        except Exception:
+            logger.exception("Failed to record assistant reply in voice history")
+
+        if reply.strip().endswith("?"):
+            self.session.expecting_reply_until = time.time() + 10.0
+            logger.info("Bot asked a question, expecting reply for 10s")
+
+        config = get_listen_voice_config(self.session.guild_id)
+        try:
+            if config.backend == LISTEN_BACKEND_ELEVENLABS:
+                from src.tts import eleven
+
+                audio_path = await eleven.synthesize_to_file(
+                    text=reply,
+                    voice_id=config.eleven_voice_id,
+                    model_id=config.eleven_model_id,
+                    output_format=eleven.default_output_format(),
+                )
+            else:
+                from src.commands.tts import generate_speech
+
+                audio_path = await generate_speech(reply, config.openai_voice)
+        except Exception:
+            logger.exception("Failed to generate TTS for batched voice reply")
+            return
+
+        try:
+            bus = get_guild_bus(self.session.guild_id)
+            bus.attach_voice_client(self.session.voice_client)
+
+            audio_source = discord.FFmpegPCMAudio(str(audio_path))
+
+            def on_done(error: Optional[BaseException] = None) -> None:
+                if error:
+                    logger.error("Error during voice reply playback: %s", error)
+                try:
+                    Path(audio_path).unlink(missing_ok=True)
+                except Exception:
+                    logger.exception("Error deleting voice reply file")
+
+            bus.add_track(audio_source, volume=1.0, on_done=on_done)
+        except Exception:
+            logger.exception("Failed to enqueue batched voice reply for playback")
+
+
 class ListenSession:
     """Per-guild voice listening state."""
 
@@ -154,6 +411,10 @@ class ListenSession:
         # Track in-flight utterance-processing futures so /listen disable can
         # wait briefly for transcriptions to land before flushing memory.
         self._processing_futures: Set[concurrent.futures.Future] = set()
+        # Per-guild reply scheduler — coalesces near-simultaneous utterances
+        # into a single batched reply (so Bonk doesn't talk over itself when
+        # two people speak at the same time).
+        self.reply_scheduler = ReplyScheduler(self)
 
     def on_frame(self, user: Optional[discord.abc.User], pcm: bytes) -> None:
         """Receive one PCM frame for a specific user."""
@@ -350,6 +611,14 @@ class ListenSession:
         if self._flush_task and not self._flush_task.done():
             self._flush_task.cancel()
 
+    def start_reply_scheduler(self) -> None:
+        """Start the per-guild ReplyScheduler drain loop."""
+        self.reply_scheduler.start()
+
+    def stop_reply_scheduler(self) -> None:
+        """Signal the ReplyScheduler to stop after its current cycle."""
+        self.reply_scheduler.stop()
+
     async def restart_listening(self) -> None:
         """Restart the listening process to recover from Opus errors."""
         logger.warning("Restarting voice listening due to error...")
@@ -357,6 +626,13 @@ class ListenSession:
         # Stop current listening
         self.active = False
         self.stop_flush_task()
+        # Drain and stop the scheduler so it doesn't try to publish to a dead
+        # voice client during the transient gap. We re-start it below.
+        try:
+            await self.reply_scheduler.flush(timeout=2.0)
+        except Exception:
+            logger.exception("Error flushing reply scheduler during restart")
+        self.stop_reply_scheduler()
 
         if self.sink:
             try:
@@ -384,6 +660,7 @@ class ListenSession:
             self.sink = sink
             self.active = True
             self.start_flush_task()
+            self.start_reply_scheduler()
 
             listen_method = getattr(self.voice_client, "listen", None)
             if callable(listen_method):
@@ -469,98 +746,35 @@ class ListenSession:
             except Exception:
                 logger.exception("Failed to schedule memory extraction")
 
+        # Always record the user side of voice history, regardless of whether
+        # this utterance triggers a reply. Single source of truth lives here;
+        # the batched reply path passes record_history=False to handle_response.
+        responses.voice_message_history.add_message(
+            'voice_shared', "user", full_transcript
+        )
+
         now = time.time()
         expecting_reply = now < self.expecting_reply_until
-
-        if not should_respond(
+        passes = should_respond(
             transcript, len(self.last_utterances), expecting_reply=expecting_reply
-        ):
-            # Even if we don't respond, add to shared history so Bonk remembers what was said.
-            # This creates a continuous shared context window for all users.
-            responses.voice_message_history.add_message('voice_shared', "user", full_transcript)
-            return
+        )
 
-        # If we were expecting a reply, clear the flag since we're handling it now
-        if expecting_reply:
-            self.expecting_reply_until = 0.0
-
-        # Build the present-users snapshot (for memory injection only —
-        # extraction was already scheduled above).
-        present_user_ids, present_names_by_id = self._present_voice_users()
-
-        # Render the memory block for the speaker + others present.
-        memory_block: Optional[str] = None
-        try:
-            memory_block = voice_memory_store.format_for_prompt(
-                guild_id=self.guild_id,
-                speaker_user_id=user_id,
-                present_user_ids=present_user_ids,
-                speaker_display_name=username,
-                present_display_names=present_names_by_id,
-            ) or None
-        except Exception:
-            logger.exception("Failed to render voice memory block")
-            memory_block = None
-
-        # Use existing chat pipeline to generate a reply.
-        # Use voice_mode=True for shorter, more conversational responses
-        try:
-            reply = await responses.handle_response(
-                full_transcript,
+        # Hand the utterance to the per-guild scheduler. It decides whether to
+        # merge with concurrent utterances, whether to fire a reply at all
+        # (based on the snapshotted flags), and produces a single TTS clip.
+        self.reply_scheduler.add(
+            BatchedUtterance(
                 user_id=user_id,
-                voice_mode=True,
-                extra_context=None,
-                memory_block=memory_block,
+                display_name=username,
+                transcript=transcript,
+                full_transcript=full_transcript,
+                arrived_at=now,
+                started_at=started_at,
+                ended_at=ended_at,
+                expecting_reply=expecting_reply,
+                passes_should_respond=passes,
             )
-        except Exception:
-            logger.exception("Error generating voice reply")
-            return
-
-        if not reply or not reply.strip():
-            return
-
-        # If the bot asked a question, listen for a response for a short window
-        if reply.strip().endswith("?"):
-            self.expecting_reply_until = time.time() + 10.0
-            logger.info("Bot asked a question, expecting reply for 10s")
-
-        # Generate TTS using the configured backend and play via the mixer.
-        config = get_listen_voice_config(self.guild_id)
-        try:
-            if config.backend == LISTEN_BACKEND_ELEVENLABS:
-                from src.tts import eleven  # local import to avoid cycles
-
-                audio_path = await eleven.synthesize_to_file(
-                    text=reply,
-                    voice_id=config.eleven_voice_id,
-                    model_id=config.eleven_model_id,
-                    output_format=eleven.default_output_format(),
-                )
-            else:
-                from src.commands.tts import generate_speech  # local import to avoid cycles
-
-                audio_path = await generate_speech(reply, config.openai_voice)
-        except Exception:
-            logger.exception("Failed to generate TTS for voice reply")
-            return
-
-        try:
-            bus = get_guild_bus(self.guild_id)
-            bus.attach_voice_client(self.voice_client)
-
-            audio_source = discord.FFmpegPCMAudio(str(audio_path))
-
-            def on_done(error: Optional[BaseException] = None) -> None:
-                if error:
-                    logger.error("Error during voice reply playback: %s", error)
-                try:
-                    Path(audio_path).unlink(missing_ok=True)
-                except Exception:
-                    logger.exception("Error deleting voice reply file")
-
-            bus.add_track(audio_source, volume=1.0, on_done=on_done)
-        except Exception:
-            logger.exception("Failed to enqueue voice reply for playback")
+        )
 
 
 class UserStream:
@@ -873,8 +1087,9 @@ async def handle_listen(interaction: discord.Interaction, enable: bool = True) -
         session.sink = sink
         session.active = True
 
-        # Start background flush checking task
+        # Start background flush checking task and reply scheduler.
         session.start_flush_task()
+        session.start_reply_scheduler()
 
         logger.info(
             "Listening enabled in guild %s, channel %s using STT backend '%s'",
@@ -895,6 +1110,7 @@ async def handle_listen(interaction: discord.Interaction, enable: bool = True) -
             session.active = False
             session.sink = None
             session.stop_flush_task()
+            session.stop_reply_scheduler()
             # The voice client is almost certainly a zombie at this point
             # (handshake closed mid-stream). Tear it down so subsequent /listen
             # attempts start clean and the bot leaves the channel server-side.
@@ -944,6 +1160,14 @@ async def handle_listen(interaction: discord.Interaction, enable: bool = True) -
             await session._drain_processing(timeout=5.0)
         except Exception:
             logger.exception("Error draining utterance tasks on /listen disable")
+
+        # Drain the reply scheduler so any pending batched reply lands (or is
+        # dropped after a bounded wait). Stop the loop afterwards.
+        try:
+            await session.reply_scheduler.flush(timeout=4.0)
+        except Exception:
+            logger.exception("Error flushing reply scheduler on /listen disable")
+        session.stop_reply_scheduler()
 
         # Force a final memory extraction over what was heard, so any pending
         # facts land before the session is torn down.

@@ -262,3 +262,55 @@ def test_strip_name_prefix():
     assert _strip_name_prefix("Alice: I play guitar", "Alice") == "I play guitar"
     assert _strip_name_prefix("Bob: hi", "Alice") == "Bob: hi"
     assert _strip_name_prefix("hi", "Alice") == "hi"
+
+
+# ---------------------------------------------------------------------------
+# record_history flag: scheduler-batched calls must not double-write history
+# ---------------------------------------------------------------------------
+
+
+def test_anthropic_api_record_history_false_suppresses_voice_history_writes(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    """When the scheduler calls handle_response with record_history=False,
+    neither the user nor the assistant message should be auto-appended by
+    the API helper. The scheduler records the assistant reply itself."""
+    stub = _StubAnthropicClient(reply_text="batched reply")
+
+    # Snapshot history length before.
+    before = list(responses.voice_message_history.get_history("voice_shared"))
+
+    asyncio.run(
+        responses.ModelAPIs.anthropic_api(
+            client=stub,
+            message="Alice: hi\nBob: hello",
+            model="claude-haiku-4-5",
+            user_id=None,
+            voice_mode=True,
+            extra_context=None,
+            memory_block=None,
+            record_history=False,
+        )
+    )
+
+    after = list(responses.voice_message_history.get_history("voice_shared"))
+    assert after == before, f"history changed when record_history=False: {after}"
+
+
+def test_voice_system_prompt_mentions_multi_speaker_handling(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    stub = _StubAnthropicClient(reply_text="ok")
+    asyncio.run(
+        responses.ModelAPIs.anthropic_api(
+            client=stub,
+            message="Alice: hi",
+            model="claude-haiku-4-5",
+            user_id=None,
+            voice_mode=True,
+        )
+    )
+    sent_system = stub.captured["system"]
+    # The new sentence is what tells the model to address each speaker by
+    # name in a single reply when multiple people just spoke.
+    assert "address each by name in a single short reply" in sent_system.lower()

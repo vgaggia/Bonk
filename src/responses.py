@@ -77,6 +77,7 @@ class ModelAPIs:
         voice_mode=False,
         extra_context=None,
         memory_block=None,
+        record_history=True,
     ):
         """Handle Anthropic API calls with message history"""
         messages = []
@@ -103,7 +104,9 @@ class ModelAPIs:
                 "You are Bonk in a Discord voice chat. "
                 "Keep your responses VERY short and conversational - like you're actually talking. "
                 "Use 1-2 short sentences maximum. Think casual speech, not essays. "
-                "Be natural and concise like real conversation."
+                "Be natural and concise like real conversation. "
+                "If multiple people just spoke, address each by name in a single short reply "
+                "(e.g., \"Alice — yes; Bob — blue.\"). Don't produce separate replies."
             )
         else:
             system_content = (
@@ -129,12 +132,13 @@ class ModelAPIs:
         )
 
         # Store the interaction in history
-        if voice_mode:
-            voice_message_history.add_message('voice_shared', "user", message)
-            voice_message_history.add_message('voice_shared', "assistant", response.content[0].text)
-        elif user_id is not None:
-            message_history.add_message(user_id, "user", message)
-            message_history.add_message(user_id, "assistant", response.content[0].text)
+        if record_history:
+            if voice_mode:
+                voice_message_history.add_message('voice_shared', "user", message)
+                voice_message_history.add_message('voice_shared', "assistant", response.content[0].text)
+            elif user_id is not None:
+                message_history.add_message(user_id, "user", message)
+                message_history.add_message(user_id, "assistant", response.content[0].text)
 
         return response.content[0].text
 
@@ -148,6 +152,7 @@ class ModelAPIs:
         voice_mode=False,
         extra_context=None,
         memory_block=None,
+        record_history=True,
     ):
         """Handle OpenAI-like API calls with message history"""
         headers = {"Content-Type": "application/json"}
@@ -168,7 +173,9 @@ class ModelAPIs:
                 "You are Bonk in a Discord voice chat. "
                 "Keep responses VERY short and conversational - like you're actually talking. "
                 "Use 1-2 short sentences maximum. Think casual speech, not essays. "
-                "Be natural and concise like real conversation."
+                "Be natural and concise like real conversation. "
+                "If multiple people just spoke, address each by name in a single short reply "
+                "(e.g., \"Alice — yes; Bob — blue.\"). Don't produce separate replies."
             )
         elif model == "local-model":
             system_prompt_text = LOCAL_SYSTEM_PROMPT
@@ -223,12 +230,13 @@ class ModelAPIs:
             response_text = response.json()['choices'][0]['message']['content']
 
             # Store the interaction in history
-            if voice_mode:
-                voice_message_history.add_message('voice_shared', "user", message)
-                voice_message_history.add_message('voice_shared', "assistant", response_text)
-            elif user_id is not None:
-                message_history.add_message(user_id, "user", message)
-                message_history.add_message(user_id, "assistant", response_text)
+            if record_history:
+                if voice_mode:
+                    voice_message_history.add_message('voice_shared', "user", message)
+                    voice_message_history.add_message('voice_shared', "assistant", response_text)
+                elif user_id is not None:
+                    message_history.add_message(user_id, "user", message)
+                    message_history.add_message(user_id, "assistant", response_text)
 
             return response_text
         except requests.exceptions.RequestException as e:
@@ -249,6 +257,7 @@ async def handle_response(
     voice_mode=False,
     extra_context=None,
     memory_block=None,
+    record_history=True,
 ) -> str:
     """Handle user message and get AI response with model selection and message history"""
     if not message or not message.strip():
@@ -278,6 +287,7 @@ async def handle_response(
                 voice_mode,
                 extra_context,
                 memory_block,
+                record_history=record_history,
             )
         elif model == 'gpt-4o':
             gpt4o_key = os.getenv("OPENAI_API_KEY")
@@ -292,6 +302,7 @@ async def handle_response(
                 voice_mode,
                 extra_context,
                 memory_block,
+                record_history=record_history,
             )
         elif model == 'local-model':
             local_key = os.getenv("LOCAL_MODEL_API_KEY")  # Optional for local models
@@ -304,6 +315,7 @@ async def handle_response(
                 voice_mode,
                 extra_context,
                 memory_block,
+                record_history=record_history,
             )
         else:
             raise ValueError(f"Unsupported model: {model}")
