@@ -1,0 +1,244 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Bonk Conlang Dictionary</title>
+    <link rel="stylesheet" href="/styles.css" />
+    <script src="https://cdn.tailwindcss.com?plugins=typography"></script>
+    <script>
+      tailwind.config = {
+        theme: {
+          extend: {
+            fontFamily: {
+              mono: ['ui-monospace', 'SFMono-Regular', 'Menlo', 'monospace'],
+            },
+          },
+        },
+      };
+    </script>
+    <script defer src="/app.js"></script>
+    <script defer src="https://unpkg.com/alpinejs@3.x.x/dist/cdn.min.js"></script>
+  </head>
+  <body class="bg-slate-950 text-slate-100 min-h-screen">
+    <main x-data="dictionary" x-init="init()" class="max-w-6xl mx-auto p-4 sm:p-8">
+      <!-- Header -->
+      <header class="mb-8 flex flex-col sm:flex-row sm:items-end gap-4 justify-between">
+        <div>
+          <h1 class="text-3xl sm:text-4xl font-bold tracking-tight">Bonk Conlang Dictionary</h1>
+          <p class="text-slate-400 mt-1">
+            <span x-text="entryCount"></span> entries
+            (<span x-text="confirmedCount"></span> confirmed) ·
+            <span x-text="rulesCount"></span> grammar rules ·
+            <span x-text="examplesCount"></span> examples
+          </p>
+        </div>
+        <div class="text-right text-sm text-slate-400">
+          <div>
+            Last synced:
+            <span x-text="lastSyncedRelative" class="text-slate-200 font-medium"></span>
+          </div>
+          <div x-show="error" x-text="error" class="text-rose-400"></div>
+        </div>
+      </header>
+
+      <!-- Controls -->
+      <section class="mb-6 p-4 rounded-xl bg-slate-900/60 border border-slate-800 flex flex-col sm:flex-row gap-4 items-start sm:items-center">
+        <label class="flex items-center gap-2">
+          <input
+            type="checkbox"
+            x-model="autoSync"
+            @change="patchMeta({ auto_sync_enabled: autoSync })"
+            class="w-4 h-4 rounded bg-slate-800 border-slate-600 accent-emerald-500"
+          />
+          <span>Auto-sync</span>
+        </label>
+        <label class="flex items-center gap-2">
+          <span class="text-slate-300">every</span>
+          <input
+            type="number"
+            min="1"
+            max="168"
+            x-model.number="syncIntervalHours"
+            class="w-20 bg-slate-800 border border-slate-700 rounded px-2 py-1 text-center"
+          />
+          <span class="text-slate-300">hours</span>
+          <button
+            @click="patchMeta({ sync_interval_hours: syncIntervalHours })"
+            class="ml-1 px-3 py-1 bg-slate-700 hover:bg-slate-600 rounded text-sm"
+          >
+            Save
+          </button>
+        </label>
+        <button
+          @click="syncNow()"
+          :disabled="forcing"
+          class="ml-auto px-4 py-2 bg-emerald-600 hover:bg-emerald-500 disabled:bg-emerald-900 disabled:text-slate-400 rounded font-medium"
+        >
+          <span x-show="!forcing">Sync now</span>
+          <span x-show="forcing">Requesting…</span>
+        </button>
+      </section>
+
+      <!-- Search + filters -->
+      <section class="mb-6 flex flex-col gap-3">
+        <input
+          type="search"
+          placeholder="Search word, meaning, notes…"
+          x-model="search"
+          class="w-full bg-slate-900/60 border border-slate-800 rounded-xl px-4 py-3"
+        />
+        <div class="flex flex-wrap gap-2">
+          <template x-for="cat in availableCategories" :key="cat">
+            <button
+              @click="toggleCategory(cat)"
+              :class="categories.includes(cat) ? 'bg-sky-600' : 'bg-slate-800 hover:bg-slate-700'"
+              class="px-3 py-1 rounded-full text-sm"
+              x-text="cat"
+            ></button>
+          </template>
+          <button
+            @click="categories = []"
+            class="px-3 py-1 rounded-full text-sm bg-slate-800 hover:bg-slate-700 text-slate-400"
+            x-show="categories.length"
+          >
+            clear
+          </button>
+        </div>
+        <div class="flex flex-wrap gap-2">
+          <template x-for="conf in availableConfidences" :key="conf">
+            <button
+              @click="toggleConfidence(conf)"
+              :class="confidences.includes(conf) ? confidenceClass(conf, true) : 'bg-slate-800 hover:bg-slate-700'"
+              class="px-3 py-1 rounded-full text-sm"
+              x-text="conf"
+            ></button>
+          </template>
+          <button
+            @click="confidences = []"
+            class="px-3 py-1 rounded-full text-sm bg-slate-800 hover:bg-slate-700 text-slate-400"
+            x-show="confidences.length"
+          >
+            clear
+          </button>
+        </div>
+      </section>
+
+      <!-- Entries -->
+      <section class="mb-10">
+        <h2 class="text-xl font-semibold mb-3">Entries</h2>
+        <div class="grid sm:grid-cols-2 lg:grid-cols-3 gap-3">
+          <template x-for="entry in filteredEntries" :key="entry.id">
+            <article class="p-4 rounded-xl bg-slate-900/60 border border-slate-800 flex flex-col gap-2">
+              <header class="flex items-baseline gap-2">
+                <span class="font-mono text-lg font-semibold" x-text="entry.word"></span>
+                <span class="text-xs uppercase tracking-wider text-slate-400" x-text="entry.category"></span>
+                <span
+                  class="ml-auto px-2 py-0.5 rounded text-xs font-medium"
+                  :class="confidenceClass(entry.confidence, true)"
+                  x-text="entry.confidence"
+                ></span>
+              </header>
+              <p class="text-slate-200" x-text="entry.meaning"></p>
+              <dl class="text-sm text-slate-400 grid grid-cols-2 gap-x-2">
+                <template x-if="entry.plural">
+                  <div class="contents"><dt>plural</dt><dd class="font-mono" x-text="entry.plural"></dd></div>
+                </template>
+                <template x-if="entry.pronunciation">
+                  <div class="contents"><dt>pron.</dt><dd x-text="entry.pronunciation"></dd></div>
+                </template>
+              </dl>
+              <p x-show="entry.notes" class="text-sm text-slate-400 italic" x-text="entry.notes"></p>
+              <details x-show="entry.source_messages && entry.source_messages.length" class="mt-1">
+                <summary class="cursor-pointer text-xs text-slate-400 hover:text-slate-200">
+                  Evidence (<span x-text="entry.source_messages.length"></span>)
+                </summary>
+                <ul class="mt-2 space-y-1 text-xs text-slate-400">
+                  <template x-for="sm in entry.source_messages" :key="sm.message_id">
+                    <li>
+                      <a
+                        :href="discordLink(sm.message_id)"
+                        target="_blank"
+                        rel="noreferrer"
+                        class="text-sky-400 hover:underline"
+                      >
+                        <span x-text="sm.author_is_jorn ? '[JORN]' : '[other]'"></span>
+                      </a>
+                      <span x-show="sm.snippet" x-text="' — ' + sm.snippet"></span>
+                    </li>
+                  </template>
+                </ul>
+              </details>
+            </article>
+          </template>
+        </div>
+        <p x-show="!filteredEntries.length" class="text-slate-500 italic">No entries match your filters.</p>
+      </section>
+
+      <!-- Conjugations -->
+      <section class="mb-10" x-show="conjugationList.length">
+        <h2 class="text-xl font-semibold mb-3">Conjugations</h2>
+        <div class="grid sm:grid-cols-2 lg:grid-cols-3 gap-3">
+          <template x-for="c in conjugationList" :key="c.infinitive">
+            <article class="p-4 rounded-xl bg-slate-900/60 border border-slate-800">
+              <header class="font-mono text-lg font-semibold mb-2" x-text="c.infinitive"></header>
+              <table class="w-full text-sm">
+                <tbody>
+                  <template x-for="[pronoun, form] in Object.entries(c.forms)" :key="pronoun">
+                    <tr class="border-t border-slate-800 first:border-t-0">
+                      <td class="py-1 font-mono text-slate-400" x-text="pronoun"></td>
+                      <td class="py-1 font-mono text-right" x-text="form"></td>
+                    </tr>
+                  </template>
+                </tbody>
+              </table>
+              <p x-show="c.notes" class="mt-2 text-xs text-slate-400 italic" x-text="c.notes"></p>
+            </article>
+          </template>
+        </div>
+      </section>
+
+      <!-- Grammar rules -->
+      <section class="mb-10" x-show="grammar.length">
+        <h2 class="text-xl font-semibold mb-3">Grammar rules</h2>
+        <ul class="space-y-2">
+          <template x-for="r in grammar" :key="r.id">
+            <li class="p-3 rounded-lg bg-slate-900/60 border border-slate-800 flex gap-3">
+              <span
+                class="px-2 py-0.5 rounded text-xs font-medium h-fit"
+                :class="confidenceClass(r.confidence, true)"
+                x-text="r.confidence"
+              ></span>
+              <div>
+                <div class="font-medium" x-text="r.rule"></div>
+                <div class="text-slate-300 text-sm" x-text="r.detail"></div>
+              </div>
+            </li>
+          </template>
+        </ul>
+      </section>
+
+      <!-- Example sentences -->
+      <section class="mb-10" x-show="examples.length">
+        <h2 class="text-xl font-semibold mb-3">Example sentences</h2>
+        <ul class="space-y-2">
+          <template x-for="s in examples" :key="s.id">
+            <li class="p-3 rounded-lg bg-slate-900/60 border border-slate-800 grid sm:grid-cols-[1fr_1fr_auto] gap-3 items-baseline">
+              <span class="font-mono text-slate-200" x-text="s.conlang"></span>
+              <span class="text-slate-300" x-text="s.english"></span>
+              <span
+                class="px-2 py-0.5 rounded text-xs font-medium justify-self-start sm:justify-self-end"
+                :class="confidenceClass(s.confidence, true)"
+                x-text="s.confidence"
+              ></span>
+            </li>
+          </template>
+        </ul>
+      </section>
+
+      <footer class="text-center text-xs text-slate-600 py-8">
+        Schema v<span x-text="schemaVersion"></span> · Bot writes the dictionary; this site only updates sync settings.
+      </footer>
+    </main>
+  </body>
+</html>

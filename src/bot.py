@@ -1,3 +1,4 @@
+import asyncio
 import os
 
 import anthropic
@@ -8,6 +9,7 @@ from dotenv import load_dotenv
 from openai import OpenAI
 
 from src import log, voice_listen
+from src.conlang import tracker as conlang_tracker
 from src.commands import (
     chat,
     clear,
@@ -64,6 +66,19 @@ async def on_ready():
         await tree.sync()
         logger.info(f'{client_instance.user} is now running!')
         logger.info("Synced application commands")
+
+        # Start the conlang tracker once — on_ready can fire on every reconnect.
+        if not getattr(client_instance, "_conlang_started", False):
+            client_instance._conlang_started = True
+
+            async def _run_conlang_tracker():
+                try:
+                    await conlang_tracker.start(client_instance, anthropic_client)
+                except Exception:
+                    logger.exception("Conlang tracker task crashed")
+
+            asyncio.create_task(_run_conlang_tracker())
+
         logger.info("✅ Bot startup completed successfully")
     except Exception as e:
         logger.error(f"Error during startup: {str(e)}")

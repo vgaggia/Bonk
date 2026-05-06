@@ -7,6 +7,12 @@ temp_tts_*.mp3
 # Persistent local data (voice memories, etc.)
 data/
 
+# Node.js
+node_modules/
+
+# Runtime logs
+logs/
+
 # Stray local virtualenvs that don't match the .venv/venv patterns
 10.venv/
 

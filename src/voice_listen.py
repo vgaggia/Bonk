@@ -975,6 +975,29 @@ if voice_recv is not None:
     _recv_opus.Decoder.decode = _safe_decode
     logger.info("Monkey-patched discord.ext.voice_recv.opus.Decoder.decode for safety")
 
+    # Monkey-patch discord.ext.voice_recv.voice_client.VoiceRecvClient._remove_ssrc
+    # to guard self._reader.speaking_timer access when _reader is the MISSING sentinel.
+    #
+    # Upstream's _remove_ssrc dereferences self._reader.speaking_timer unconditionally,
+    # but _reader is only set when vc.listen(sink) runs. connect_to_user_channel always
+    # uses VoiceRecvClient (so the same connection can later receive for /listen), so
+    # any voice command that doesn't involve /listen (/tts11, /play, /tts, …) leaves
+    # _reader=MISSING. When any user's SSRC drops (stops speaking, leaves channel,
+    # DAVE re-key), the gateway hook calls _remove_ssrc and AttributeError propagates
+    # into discord.py's _poll_voice_ws, killing the voice-WS poller task. UDP send-side
+    # keeps draining ffmpeg (so playback returns 0) but Discord stops relaying audio —
+    # symptom is "TTS goes silent until /disconnect+rejoin".
+    from discord.ext.voice_recv import voice_client as _recv_vc  # type: ignore
+
+    def _safe_remove_ssrc(self, *, user_id: int) -> None:
+        ssrc = self._id_to_ssrc.pop(user_id, None)
+        if ssrc and self._reader:
+            self._reader.speaking_timer.drop_ssrc(ssrc)
+            self._ssrc_to_id.pop(ssrc, None)
+
+    _recv_vc.VoiceRecvClient._remove_ssrc = _safe_remove_ssrc
+    logger.info("Monkey-patched discord.ext.voice_recv.voice_client.VoiceRecvClient._remove_ssrc for safety")
+
     class TranscriptionSink(voice_recv.AudioSink):  # type: ignore[misc]
         """Audio sink that feeds per-user PCM into a ListenSession."""
 

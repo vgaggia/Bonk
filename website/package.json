@@ -1,0 +1,22 @@
+{
+  "name": "bonk-conlang-web",
+  "version": "0.1.0",
+  "description": "Living dictionary site for the Bonk conlang tracker",
+  "type": "module",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "start:local": "node server.js --notunnel",
+    "dev": "node --watch server.js --notunnel"
+  },
+  "dependencies": {
+    "chokidar": "^3.6.0",
+    "express": "^4.19.2"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "devDependencies": {
+    "node-windows": "^1.0.0-beta.8"
+  }
+}

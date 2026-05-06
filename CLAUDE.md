@@ -8,9 +8,9 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 python main.py                                    # Run the bot (Windows: start.bat)
 pip install -r requirements.txt                   # Runtime deps
 pip install -r dev-requirements.txt               # ruff + pytest
-pytest                                            # Run all tests (quiet mode from pytest.ini)
-pytest tests/test_aspect_ratios.py                # Single test file
-pytest tests/test_aspect_ratios.py::test_dalle_aspect_ratios  # Single test
+pytest                                            # Run all tests (quiet mode from pyproject.toml)
+pytest tests/test_voice_memory.py                 # Single test file
+pytest tests/test_voice_memory.py::test_extraction # Single test
 ruff check .                                      # Lint (line-length 100, py310 target)
 ruff format .                                     # Format
 ```
@@ -34,7 +34,7 @@ The HTTP handler lives in `whisperx_sidecar/server.py` and is the only place the
 ## Architecture
 
 ### Command wiring pattern
-All slash commands are registered in `src/bot.py` with `@tree.command(...)` and dispatch to a `handle_*` function in `src/commands/<name>.py`. **`@enqueue` is applied per-command, not universally.** Long-running generation commands (`/chat`, `/draw`, `/imagine`, `/3d`, `/video`, `/tts`, `/tts11`, `/listen`, `/voice`) bypass the queue and call `interaction.response.defer(thinking=True)` themselves so they can run in parallel; only short control commands (`/play`, `/stop`, `/pause`, `/resume`, `/next`, `/reset`, `/clear`, `/help`) use `@enqueue` to serialize. Both paths end up deferred — `QueueManager.add_to_queue` defers the interaction itself before running the task (`src/queue_manager.py:21`), so handlers under `@enqueue` should *not* defer again.
+All slash commands are registered in `src/bot.py` with `@tree.command(...)` and dispatch to a `handle_*` function in `src/commands/<name>.py`. **`@enqueue` is applied per-command, not universally.** Long-running generation commands (`/chat`, `/draw`, `/imagine`, `/3d`, `/video`, `/tts`, `/tts11`, `/listen`, `/voice`) bypass the queue and call `interaction.response.defer(thinking=True)` themselves so they can run in parallel; the privacy commands (`/memories`, `/forget`) likewise skip `@enqueue` and `defer(ephemeral=True, thinking=True)` so the "thinking…" indicator stays private. Only short control commands (`/play`, `/stop`, `/pause`, `/resume`, `/next`, `/reset`, `/clear`, `/help`) use `@enqueue` to serialize. Both paths end up deferred — `QueueManager.add_to_queue` defers the interaction itself before running the task (`src/queue_manager.py:21`), so handlers under `@enqueue` should *not* defer again.
 
 ### Per-guild audio bus (`src/audio_bus.py`) — central mixing layer
 Music and TTS do **not** call `voice_client.play()` directly. Each guild has a single `GuildAudioBus` holding a `MixedAudioSource`; playback features add tracks to that mixer. Consequences worth knowing:
@@ -62,7 +62,39 @@ Requires the optional `discord-ext-voice-recv` extension. Pipeline per guild:
 - Completed utterances route to `_transcribe_with_openai` (`WHISPER_MODEL`, default `whisper-1`) or `_transcribe_with_whisperx_http` (the sidecar, `WHISPERX_HTTP_URL`) based on `LISTEN_STT_BACKEND`.
 - `should_respond` gates replies: the bot only speaks if the transcript contains a name from `TRIGGER_NAMES` (including common Whisper mishearings like "balk"/"bulk"), ends in `?`, or lands inside a 10s expectation window opened after the bot asked its own question.
 - Frames received while the mixer has active tracks are dropped to prevent self-feedback.
-- A module-level monkey patch on `discord.ext.voice_recv.opus.Decoder.decode` swallows `OpusError` by returning 20ms of silence, because that upstream exception otherwise kills the packet reader loop.
+- Two module-level monkey patches defend against upstream voice-recv bugs:
+  - `discord.ext.voice_recv.opus.Decoder.decode` swallows `OpusError` by returning 20ms of silence — the upstream exception otherwise kills the packet reader loop and is also expected during the DAVE decrypt gap.
+  - `VoiceRecvClient._remove_ssrc` is replaced with a guarded version because `connect_to_user_channel` always instantiates `VoiceRecvClient` (so any later `/listen` reuses the connection). When voice is used *without* `/listen` (`/tts11`, `/play`, `/tts`, …) `self._reader` stays `MISSING`, and the upstream `_remove_ssrc` dereferences `_reader.speaking_timer` unconditionally — any SSRC drop (user stops speaking, leaves channel, DAVE re-key) raises `AttributeError` into `_poll_voice_ws`, killing the voice-WS poller. The symptom is "TTS goes silent until /disconnect+rejoin"; the patch no-ops when `_reader` isn't ready.
+
+### Reply coalescing (`ReplyScheduler` in `src/voice_listen.py:147`)
+Every `ListenSession` owns one `ReplyScheduler` that batches utterances arriving close together into a single LLM call and a single TTS clip — without it, two people speaking near-simultaneously each fired an independent `_handle_utterance` and the audio bus mixer overlaid the resulting replies (Bonk talking over itself).
+
+- One drainer task per guild, so only one batch is ever in flight; utterances arriving while a reply is being produced queue for the next batch instead of overlapping.
+- Solo speakers see only `MERGE_SETTLE = 0.20s` of added latency. Multi-speaker batches wait up to `MERGE_DEADLINE_SHORT = 1.5s` for the merge window to settle, with a hard `MERGE_DEADLINE_HARD = 3.0s` ceiling.
+- The scheduler is also why `responses.handle_response` carries a `record_history` flag — the scheduler records one assistant entry per *batch* and passes `record_history=False` so the API helper doesn't double-write the user side.
+
+### Voice memory (`src/voice_memory.py`, `/memories`, `/forget`)
+A separate Haiku call (model from `MEMORY_EXTRACTION_MODEL`, default `claude-haiku-4-5-20251001`) periodically extracts facts/vibe/notes about each speaker from recent voice transcripts and merges them into a JSON store; that store is read on every voice reply and a memory block is appended to the system prompt. The store outlives sessions and is shared across the process via the module-level `voice_memory_store` singleton (`voice_memory.py:1182`), which loads from disk at import time.
+
+- **Keying is per-guild × per-user.** Same Discord user_id in two guilds = two independent memories (privacy boundary).
+- Storage is JSON at `data/voice_memories.json` with snapshot-then-executor atomic-rename writes; `.gitignore` excludes `data/`.
+- Speakers in the extraction transcript are addressed by stable `speaker_<user_id>` labels, never display names, so duplicate nicknames cannot cross-attribute facts.
+- Extraction is debounced (`EXTRACTION_MIN_INTERVAL = 30s` and `EXTRACTION_MIN_PENDING = 3` new utterances) and runs as a background task with a per-guild `asyncio.Lock`; the LLM call is wrapped in `asyncio.wait_for(EXTRACTION_TIMEOUT)` so failures never block listen disable.
+- A deterministic regex PII filter is the second line of defense against the model ignoring the prompt's "do not extract sensitive data" rule.
+- The injected memory block carries hard "do not recite" rules; if a user asks what Bonk knows about anyone, the model is instructed to redirect them to `/memories`.
+- `/memories` is per-user and ephemeral; `/forget` supports `me`, `wipe-and-opt-out`, `re-enable`, and admin-only `all`. Opted-out users are filtered out before the extraction transcript is built and skipped by `format_for_prompt`.
+
+### Conlang tracker (`src/conlang/`, optional companion website at `website/`)
+Background task that monitors `CONLANG_CHANNEL_ID` for a constructed-language design discussion, periodically sends new messages to Claude (`CONLANG_MODEL`, default `claude-sonnet-4-6`) for vocabulary/grammar extraction, and merges findings into `data/conlang_dictionary.json`. Gated entirely on env: if `CONLANG_CHANNEL_ID` is unset the tracker is inactive and `start()` returns early.
+
+- **Loop shape** (`tracker.py`): single `asyncio.Task` started from `on_ready` once (guarded by `client_instance._conlang_started`). Polls every 60s; runs a sync cycle when either `meta.auto_sync_enabled` is true and `sync_interval_hours` has elapsed since `meta.last_updated`, or `meta.force_sync_requested_at > meta.last_updated`. So toggling auto-sync off doesn't kill the tracker — it just disables the auto trigger while keeping force-sync responsive.
+- **Authoritative source**: only the user with `id == JORN_USER_ID` can move entries to `confirmed`. Other speakers cap at `high`. The analyzer prompt enforces this; the merge layer is monotonic-upgrade-only as a second line of defense (`database._apply_update_to_entry`).
+- **Dual-role words** (Ha = yes + noun, Wa = what + noun, etc.) are first-class — entries are keyed on `(word, category)` not on `word` alone. Seed creates separate entries per role.
+- **Atomic writes with website re-merge**: bot's `database.save()` re-reads the on-disk `meta` immediately before each atomic write and overwrites `WEBSITE_OWNED_META_FIELDS` (`sync_interval_hours`, `auto_sync_enabled`) onto its in-memory snapshot. Without this, a UI toggle landing during a 30-second Anthropic call would be clobbered by the bot's stale snapshot. `force_sync_requested_at` is bot-owned (it clears the field after processing).
+- **Cross-batch context**: `meta.recent_context` keeps the last ~10 messages with their text. The analyzer sees them but doesn't re-extract — lets it spot "Jorn denies in N, confirms in N+1" trolling patterns.
+- **Structured output via tool use**: analyzer forces `tool_choice={"type":"tool","name":"record_findings"}` with a strict input_schema. No raw-JSON-in-text parsing.
+- **Backfill chunking**: first run pulls up to 200 messages and processes them in 50-message chunks, advancing `last_message_id` between chunks so a partial failure doesn't replay everything.
+- **Companion website** (`website/`, separate Node project): Express + Alpine.js + Tailwind CDN, no build step. Reads `data/conlang_dictionary.json`, exposes `PATCH /api/meta` for the auto-sync toggle / interval / force-sync button, and pushes SSE on file change. Optional `WEBSITE_ADMIN_TOKEN` env gates writes only (reads stay open). Recommended hosting: Cloudflare Quick Tunnel for a throwaway URL or named tunnel + Cloudflare Access (free email allowlist) for a stable, auth-gated one — both avoid port forwarding.
 
 ### Chat / message history split (`src/responses.py`, `src/message_history.py`)
 There are **two** `MessageHistory` instances:
@@ -94,6 +126,10 @@ Use `src/error_handler.handle_error(e)` to map errors to user-facing strings (it
 `.env` is loaded in both `src/bot.py` and `src/responses.py`; required keys are `DISCORD_BOT_TOKEN` and `ANTHROPIC_API_KEY` (checked in `src/health_check.py` at startup, which also probes the Anthropic API and raises `APIError` if it fails). See `.env.example` for the full list including `LISTEN_STT_BACKEND`, `WHISPERX_HTTP_URL`, `WHISPERX_MODEL`, `LOCAL_API_BASE`, and the per-service keys.
 
 Run `python -m src.health_check` to validate the env keys and probe the Anthropic API without booting the Discord client.
+
+## Commit style
+
+Imperative mood with a type prefix: `fix: handle voice connect timeout`, `feat: add /video command params`. PRs should include summary, motivation, and steps to verify.
 
 ## Related documents
 - `AGENTS.md` — additional contributor conventions (commit style, test layout).

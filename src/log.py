@@ -31,6 +31,9 @@ class ColorFormatter(logging.Formatter):
         return message
 
 
+_shared_file_handler: RotatingFileHandler | None = None
+
+
 def setup_logger(module_name: str) -> logging.Logger:
     """Configure logging with console and file output
 
@@ -39,6 +42,8 @@ def setup_logger(module_name: str) -> logging.Logger:
     Returns:
         logging.Logger: Configured logger instance
     """
+    global _shared_file_handler
+
     # Create logger
     logger = logging.getLogger(module_name.replace('.py', ''))
     logger.setLevel(logging.INFO)
@@ -52,26 +57,26 @@ def setup_logger(module_name: str) -> logging.Logger:
     console_handler.setFormatter(ColorFormatter(console_format))
     logger.addHandler(console_handler)
 
-    # File handler (if enabled)
+    # File handler (if enabled) — shared across all loggers so only one
+    # file handle is open, preventing Windows PermissionError on rotation.
     if os.getenv('LOGGING', '').lower() == 'true':
         try:
-            # Setup log directory in project root
-            log_dir = Path(__file__).parent.parent / 'logs'
-            log_dir.mkdir(exist_ok=True)
-            log_file = log_dir / 'discord_bot.log'
+            if _shared_file_handler is None:
+                log_dir = Path(__file__).parent.parent / 'logs'
+                log_dir.mkdir(exist_ok=True)
+                log_file = log_dir / 'discord_bot.log'
 
-            # Create rotating file handler
-            file_handler = RotatingFileHandler(
-                filename=log_file,
-                maxBytes=10 * 1024 * 1024,  # 10MB
-                backupCount=3,
-                encoding='utf-8',
-            )
+                _shared_file_handler = RotatingFileHandler(
+                    filename=log_file,
+                    maxBytes=10 * 1024 * 1024,  # 10MB
+                    backupCount=3,
+                    encoding='utf-8',
+                )
 
-            # Plain formatter for file output
-            file_format = '%(asctime)s %(levelname)-8s %(name)s -> %(message)s'
-            file_handler.setFormatter(logging.Formatter(file_format))
-            logger.addHandler(file_handler)
+                file_format = '%(asctime)s %(levelname)-8s %(name)s -> %(message)s'
+                _shared_file_handler.setFormatter(logging.Formatter(file_format))
+
+            logger.addHandler(_shared_file_handler)
 
         except Exception as e:
             logger.error(f"Failed to setup file logging: {e}")

@@ -1,0 +1,15 @@
+/* Tailwind CDN handles utilities. This file holds anything Tailwind can't
+   express cleanly — so far, just smoothing the initial render before Alpine
+   wires up so the [x-cloak] flicker doesn't happen. */
+
+[x-cloak] {
+  display: none !important;
+}
+
+body {
+  font-feature-settings: 'cv02', 'cv03', 'cv04', 'cv11';
+}
+
+input[type='search']::-webkit-search-cancel-button {
+  filter: invert(0.6);
+}
